@@ -4,6 +4,7 @@
 
 ## 项目结构
 
-- `src/agent/`：核心 LangGraph Agent 实现
-- `webapp.py`：基于 Web 的应用入口
-- `streamlit_app.py`：Streamlit 版本的用户界面
+- `src/agent/swe`：Savant SWE Agent ‑ AI 自主软件工程 Agent 系统
+- `webapp.py`：swe的应用入口
+- `streamlit_app.py`：multimedia的用户界面
+- 'src/agent/multimedia':AI 多模态游戏宣传片生成 Agent 系统

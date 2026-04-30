@@ -91,9 +91,6 @@ STATUS_LABELS = {
 }
 
 
-# =========================
-# Session / bootstrap
-# =========================
 def init_session() -> None:
     init_task_store()
 
@@ -108,7 +105,6 @@ def init_session() -> None:
         "pending_action": None,
         "pending_task_defaults": None,
         "auto_bootstrapped": False,
-        # metadata
         "task_mode": "quick",
         "task_title": "未命名任务",
         "task_tags_text": "",
@@ -124,7 +120,7 @@ def init_session() -> None:
         "task_avoid": TASK_TEMPLATES["电影级科幻动作短片"]["avoid"],
         "task_notes": "",
         "task_text": DEFAULT_TASK,
-        # fork / branch
+        "task_use_first_last_frame": False, # 新增首尾帧开关
         "fork_source_thread_id": "",
         "fork_source_checkpoint_id": "",
         "fork_target_thread_id": "",
@@ -142,16 +138,13 @@ def init_session() -> None:
             st.session_state[key] = value
 
 def sync_shared_to_pro_widgets() -> None:
-    """每次渲染前把共享的 task_* 值同步到专业模式的 widget key"""
-    for field in ["task_title", "task_tags_text", "task_text"]:
+    for field in["task_title", "task_tags_text", "task_text"]:
         pro_key = f"pro_{field}"
         if field in st.session_state:
             st.session_state[pro_key] = st.session_state[field]
 
-
 def sync_pro_to_shared() -> None:
-    """用户在专业模式修改后，同步回共享的 task_* 变量"""
-    for field in ["task_title", "task_tags_text", "task_text"]:
+    for field in["task_title", "task_tags_text", "task_text"]:
         pro_key = f"pro_{field}"
         if pro_key in st.session_state:
             st.session_state[field] = st.session_state[pro_key]
@@ -161,10 +154,8 @@ def sync_thread_from_input() -> None:
     if value:
         st.session_state.thread_id = value
 
-
 def _normalize_tags_text(text: str) -> List[str]:
-    return [t.strip() for t in text.split(",") if t.strip()]
-
+    return[t.strip() for t in text.split(",") if t.strip()]
 
 def _tags_to_text(tags: Any) -> str:
     if tags is None:
@@ -175,20 +166,11 @@ def _tags_to_text(tags: Any) -> str:
         return tags
     return str(tags)
 
-
 def build_plain_task_prompt(
-    project_name: str,
-    duration: int,
-    shot_count: int,
-    style: str,
-    mood: str,
-    protagonist: str,
-    scene: str,
-    must_have: str,
-    avoid: str,
-    notes: str,
+    project_name: str, duration: int, shot_count: int, style: str, mood: str,
+    protagonist: str, scene: str, must_have: str, avoid: str, notes: str,
 ) -> str:
-    parts = [
+    parts =[
         f"制作一段约{duration}秒的{project_name}。",
         f"整体风格：{style}。",
         f"整体情绪与节奏：{mood}。",
@@ -201,7 +183,6 @@ def build_plain_task_prompt(
         parts.append(f"额外要求：{notes.strip()}。")
     parts.append("请输出适合拆分为多个连贯镜头的完整创意任务描述，方便后续生成分镜、关键帧和视频。")
     return "".join(parts)
-
 
 def on_template_change() -> None:
     template_name = st.session_state.task_template_name
@@ -218,17 +199,13 @@ def on_template_change() -> None:
     if not st.session_state.task_title or st.session_state.task_title == "未命名任务":
         st.session_state.task_title = template_name
 
-
 def apply_pre_widget_bootstrap() -> None:
     pending = st.session_state.pending_task_defaults
     if isinstance(pending, dict):
         for key, value in pending.items():
             st.session_state[key] = value
         st.session_state.pending_task_defaults = None
-
-    # 新增：让专业模式 widget 也能立刻显示最新的值
-    sync_shared_to_pro_widgets()   # ← 加这一行（保险起见）
-
+    sync_shared_to_pro_widgets()
 
 def collect_task_metadata() -> Dict[str, Any]:
     title = st.session_state.task_title.strip() if st.session_state.task_title else ""
@@ -236,10 +213,8 @@ def collect_task_metadata() -> Dict[str, Any]:
     template_name = st.session_state.task_template_name or ""
     project_type = st.session_state.task_project_type or template_name or "自定义任务"
     mode = st.session_state.task_mode or "unknown"
-
     duration = st.session_state.task_duration
     shot_count = st.session_state.task_shot_count
-
     parent_thread_id = st.session_state.get("parent_thread_id") or None
     fork_from_checkpoint_id = st.session_state.get("fork_from_checkpoint_id") or None
 
@@ -255,12 +230,10 @@ def collect_task_metadata() -> Dict[str, Any]:
         "fork_from_checkpoint_id": fork_from_checkpoint_id,
     }
 
-
 def derive_task_text_if_needed() -> str:
     task_text = (st.session_state.task_text or "").strip()
     if task_text:
         return task_text
-
     return build_plain_task_prompt(
         project_name=st.session_state.task_project_type or "短片",
         duration=int(st.session_state.task_duration or 30),
@@ -274,9 +247,8 @@ def derive_task_text_if_needed() -> str:
         notes=st.session_state.task_notes or "",
     )
 
-
 def row_to_session_defaults(row: Dict[str, Any], *, thread_id: Optional[str] = None) -> Dict[str, Any]:
-    tags_text = _tags_to_text(row.get("tags", []))
+    tags_text = _tags_to_text(row.get("tags",[]))
     return {
         "thread_id": thread_id or row["thread_id"],
         "thread_id_input": thread_id or row["thread_id"],
@@ -292,11 +264,9 @@ def row_to_session_defaults(row: Dict[str, Any], *, thread_id: Optional[str] = N
         "fork_from_checkpoint_id": row.get("fork_from_checkpoint_id"),
     }
 
-
 def load_checkpoint_snapshot(thread_id: str, checkpoint_id: str):
     config = {"configurable": {"thread_id": thread_id, "checkpoint_id": checkpoint_id}}
     return multimedia_agent.get_state(config)
-
 
 def clear_checkpoint_fork_editor() -> None:
     st.session_state.fork_source_thread_id = ""
@@ -304,11 +274,7 @@ def clear_checkpoint_fork_editor() -> None:
     st.session_state.fork_target_thread_id = ""
     st.session_state.fork_editor_ready = False
 
-
 def prepare_checkpoint_fork_editor(thread_id: str, checkpoint_id: str) -> None:
-    """
-    读取指定 checkpoint 的 state，并把它填到分叉编辑器里。
-    """
     snapshot = load_checkpoint_snapshot(thread_id, checkpoint_id)
     values = getattr(snapshot, "values", None) or {}
     task_row = load_task_state(thread_id) or {}
@@ -319,7 +285,7 @@ def prepare_checkpoint_fork_editor(thread_id: str, checkpoint_id: str) -> None:
     st.session_state.fork_editor_ready = True
 
     st.session_state.fork_title = f"{task_row.get('title') or task_row.get('project_type') or '分叉任务'}（分叉）"
-    st.session_state.fork_tags_text = _tags_to_text(task_row.get("tags", []))
+    st.session_state.fork_tags_text = _tags_to_text(task_row.get("tags",[]))
     st.session_state.fork_task_text = values.get("task") or task_row.get("task_text") or DEFAULT_TASK
     st.session_state.fork_global_setting = values.get("global_setting") or task_row.get("summary", {}).get("global_setting", "")
 
@@ -327,11 +293,7 @@ def prepare_checkpoint_fork_editor(thread_id: str, checkpoint_id: str) -> None:
     st.session_state.parent_thread_id = thread_id
     st.session_state.fork_from_checkpoint_id = checkpoint_id
 
-
 def perform_checkpoint_fork() -> None:
-    """
-    从选中的 checkpoint 创建分叉，并继续执行。
-    """
     source_thread_id = (st.session_state.fork_source_thread_id or "").strip()
     checkpoint_id = (st.session_state.fork_source_checkpoint_id or "").strip()
     target_thread_id = (st.session_state.fork_target_thread_id or "").strip() or str(uuid.uuid4())
@@ -346,7 +308,6 @@ def perform_checkpoint_fork() -> None:
     branch_task_text = (st.session_state.fork_task_text or "").strip() or values.get("task", "")
     branch_global_setting = (st.session_state.fork_global_setting or "").strip() or values.get("global_setting", "")
 
-    # 先把目标分支元数据写到任务库，方便立刻出现在看板中
     meta = collect_task_metadata()
     save_task_state(
         thread_id=target_thread_id,
@@ -398,11 +359,7 @@ def perform_checkpoint_fork() -> None:
 
     persist_task_state_from_thread(target_thread_id, pending_payload=payload)
 
-
 def render_checkpoint_fork_editor() -> None:
-    """
-    分叉编辑器：从某个 checkpoint 载入 state，允许修改任务描述与全局设定，再继续执行。
-    """
     st.subheader("Checkpoint 分叉")
     st.caption("先从下面的时间轴选择一个 checkpoint，再在这里编辑后创建分叉。")
 
@@ -428,18 +385,16 @@ def render_checkpoint_fork_editor() -> None:
     col3.metric("step", metadata.get("step", "N/A"))
 
     with st.expander("分叉源 checkpoint 预览", expanded=True):
-        st.json(
-            {
-                "next": next_nodes,
-                "task": values.get("task", ""),
-                "global_setting": values.get("global_setting", ""),
-                "current_scene_index": values.get("current_scene_index"),
-                "final_movie_path": values.get("final_movie_path"),
-                "aborted": values.get("aborted"),
-                "abort_reason": values.get("abort_reason") or values.get("error_log"),
-                "target_thread_id": st.session_state.fork_target_thread_id,
-            }
-        )
+        st.json({
+            "next": next_nodes,
+            "task": values.get("task", ""),
+            "global_setting": values.get("global_setting", ""),
+            "current_scene_index": values.get("current_scene_index"),
+            "final_movie_path": values.get("final_movie_path"),
+            "aborted": values.get("aborted"),
+            "abort_reason": values.get("abort_reason") or values.get("error_log"),
+            "target_thread_id": st.session_state.fork_target_thread_id,
+        })
 
     if st.button("清空分叉目标", use_container_width=True):
         clear_checkpoint_fork_editor()
@@ -450,23 +405,19 @@ def render_checkpoint_fork_editor() -> None:
         st.text_input("标签（用逗号分隔）", key="fork_tags_text")
         st.text_area("分叉后的任务描述", key="fork_task_text", height=220)
         st.text_area("分叉后的全局设定", key="fork_global_setting", height=160)
-
         submitted = st.form_submit_button("创建分叉并继续")
 
     if submitted:
         perform_checkpoint_fork()
         st.rerun()
 
-
 def queue_restore_task(thread_id: str) -> None:
     row = load_task_state(thread_id)
     if row is None:
         st.error(f"找不到 thread_id={thread_id} 对应的任务")
         return
-
     st.session_state.pending_task_defaults = row_to_session_defaults(row, thread_id=thread_id)
     st.session_state.pending_action = "restore"
-
 
 def queue_fork_task(row: Dict[str, Any]) -> None:
     new_thread_id = str(uuid.uuid4())
@@ -476,7 +427,6 @@ def queue_fork_task(row: Dict[str, Any]) -> None:
     defaults["fork_from_checkpoint_id"] = None
     st.session_state.pending_task_defaults = defaults
     st.session_state.pending_action = "start_new"
-
 
 def queue_new_task_from_current_inputs(mode: str) -> None:
     new_thread_id = str(uuid.uuid4())
@@ -504,30 +454,8 @@ def queue_new_task_from_current_inputs(mode: str) -> None:
     }
     st.session_state.pending_action = "start_new"
 
-
-def queue_apply_generated_prompt() -> None:
-    generated = build_plain_task_prompt(
-        project_name=st.session_state.task_project_type or "短片",
-        duration=int(st.session_state.task_duration or 30),
-        shot_count=int(st.session_state.task_shot_count or 4),
-        style=st.session_state.task_style or "",
-        mood=st.session_state.task_mood or "",
-        protagonist=st.session_state.task_protagonist or "",
-        scene=st.session_state.task_scene or "",
-        must_have=st.session_state.task_must_have or "",
-        avoid=st.session_state.task_avoid or "",
-        notes=st.session_state.task_notes or "",
-    )
-    st.session_state.pending_task_defaults = {"task_text": generated}
-    st.rerun()
-
-
-# =========================
-# LangGraph helpers
-# =========================
 def get_config() -> Dict[str, Any]:
     return {"configurable": {"thread_id": st.session_state.thread_id}}
-
 
 def extract_interrupt(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     interrupts = result.get("__interrupt__")
@@ -538,15 +466,13 @@ def extract_interrupt(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return first.value
     return first
 
-
 def _safe_get(obj: Any, key: str, default=None):
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
 
-
 def summarize_current_state(values: Dict[str, Any]) -> Dict[str, Any]:
-    scenes = values.get("scenes", []) or []
+    scenes = values.get("scenes", []) or[]
     idx = values.get("current_scene_index")
     current_scene: Dict[str, Any] = {}
     if isinstance(idx, int) and 0 <= idx < len(scenes):
@@ -564,12 +490,12 @@ def summarize_current_state(values: Dict[str, Any]) -> Dict[str, Any]:
         "critique": current_scene.get("critique", ""),
         "video_critique": current_scene.get("video_critique", ""),
         "image_url": current_scene.get("image_url", ""),
+        "last_image_url": current_scene.get("last_image_url", ""), # 记录尾帧
         "video_url": current_scene.get("raw_video_url") or current_scene.get("final_video_url", ""),
         "final_movie_path": values.get("final_movie_path"),
         "aborted": bool(values.get("aborted")),
         "abort_reason": values.get("abort_reason") or values.get("error_log"),
     }
-
 
 def normalize_status(values: Dict[str, Any], pending_payload: Optional[Dict[str, Any]]) -> str:
     if values.get("aborted"):
@@ -580,11 +506,7 @@ def normalize_status(values: Dict[str, Any], pending_payload: Optional[Dict[str,
         return "PAUSED"
     return "RUNNING"
 
-
 def persist_task_state_from_thread(thread_id: str, pending_payload: Optional[Dict[str, Any]] = None) -> None:
-    """
-    将当前 LangGraph checkpoint 的摘要同步到 task_registry。
-    """
     try:
         snapshot = get_thread_state(thread_id)
         values = getattr(snapshot, "values", None) or {}
@@ -632,11 +554,7 @@ def persist_task_state_from_thread(thread_id: str, pending_payload: Optional[Dic
         last_error=values.get("error_log"),
     )
 
-
 def restore_thread_state_only(thread_id: str) -> None:
-    """
-    恢复 thread 的 checkpoint 状态，但不修改 widget key（这些已在 pre-bootstrap 应用）。
-    """
     thread_id = thread_id.strip()
     if not thread_id:
         return
@@ -674,13 +592,10 @@ def restore_thread_state_only(thread_id: str) -> None:
                 st.session_state.latest_snapshot = {"values": summary}
             st.session_state.started = True
             return
-
         st.error(f"恢复线程失败：{e}")
-
 
 def run_graph(input_or_command: Any) -> Dict[str, Any]:
     return multimedia_agent.invoke(input_or_command, config=get_config())
-
 
 def start_new_run() -> None:
     st.session_state.started = True
@@ -695,18 +610,18 @@ def start_new_run() -> None:
 
     initial_state = {
         "task": task_text,
-        "scenes": [],
+        "scenes":[],
         "current_scene_index": 0,
         "global_setting": "",
-        "reference_images": [],
-        "reference_embeddings": [],
+        "reference_images":[],
+        "reference_embeddings":[],
         "final_movie_path": None,
         "error_log": None,
         "aborted": False,
         "abort_reason": None,
+        "use_first_last_frame": st.session_state.task_use_first_last_frame, # 传入首尾帧开关
     }
 
-    # 先写一条初始任务记录，保证刷新时可以看到任务元数据
     meta = collect_task_metadata()
     save_task_state(
         thread_id=st.session_state.thread_id,
@@ -748,7 +663,6 @@ def start_new_run() -> None:
         except Exception:
             pass
 
-
 def resume_with_decision(decision: Dict[str, Any]) -> None:
     with st.spinner("继续执行图文视频流水线..."):
         result = run_graph(Command(resume=decision))
@@ -770,7 +684,6 @@ def resume_with_decision(decision: Dict[str, Any]) -> None:
         except Exception:
             pass
 
-
 def apply_pending_actions() -> None:
     if st.session_state.pending_action == "start_new":
         st.session_state.pending_action = None
@@ -779,36 +692,23 @@ def apply_pending_actions() -> None:
         st.session_state.pending_action = None
         restore_thread_state_only(st.session_state.thread_id)
 
-
 def auto_bootstrap_latest_task() -> None:
     if st.session_state.auto_bootstrapped:
         return
-
     if st.session_state.thread_id_input.strip():
         st.session_state.auto_bootstrapped = True
         return
-
     latest = get_latest_active_task_state() or get_latest_task_state()
     if latest is not None:
         st.session_state.pending_task_defaults = row_to_session_defaults(latest, thread_id=latest["thread_id"])
         st.session_state.pending_action = "restore"
-
     st.session_state.auto_bootstrapped = True
 
-
-# =========================
-# Task inputs / UI sections
-# =========================
 def render_quick_start_card() -> None:
     st.subheader("新手模式：只填自然语言，也能直接开始")
     st.caption("先选模板，再写几句话。下面的任务描述可以直接编辑。")
 
-    st.selectbox(
-        "选择一个模板",
-        list(TASK_TEMPLATES.keys()),
-        key="task_template_name",
-        on_change=on_template_change,
-    )
+    st.selectbox("选择一个模板", list(TASK_TEMPLATES.keys()), key="task_template_name", on_change=on_template_change)
 
     c1, c2 = st.columns(2)
     with c1:
@@ -856,31 +756,13 @@ def render_quick_start_card() -> None:
     with st.expander("系统根据当前配置的建议版本", expanded=False):
         st.write(suggested)
 
-
 def render_professional_mode() -> None:
     st.subheader("专业模式：直接编辑完整任务")
     st.caption("适合已经知道要做什么的时候，直接写完整描述。")
 
-    st.text_input(
-        "任务标题",
-        key="pro_task_title",                    # ← 改成 pro_ 前缀
-        placeholder="例如：赛博特工短片",
-        on_change=sync_pro_to_shared             # ← 新增 on_change
-    )
-
-    st.text_input(
-        "标签（用逗号分隔）",
-        key="pro_task_tags_text",                # ← 改成 pro_ 前缀
-        placeholder="科幻, 未来都市, 电影感",
-        on_change=sync_pro_to_shared             # ← 新增 on_change
-    )
-
-    st.text_area(
-        "完整任务描述",
-        key="pro_task_text",                     # ← 改成 pro_ 前缀
-        height=360,
-        on_change=sync_pro_to_shared             # ← 新增 on_change
-    )
+    st.text_input("任务标题", key="pro_task_title", placeholder="例如：赛博特工短片", on_change=sync_pro_to_shared)
+    st.text_input("标签（用逗号分隔）", key="pro_task_tags_text", placeholder="科幻, 未来都市, 电影感", on_change=sync_pro_to_shared)
+    st.text_area("完整任务描述", key="pro_task_text", height=360, on_change=sync_pro_to_shared)
 
     col_a, col_b = st.columns([1, 1])
     with col_a:
@@ -891,23 +773,20 @@ def render_professional_mode() -> None:
     with col_b:
         st.caption("你也可以先把描述改好，再开始。")
 
-
 def render_task_card(item: Dict[str, Any]) -> None:
     summary = item.get("summary", {}) or {}
     title = item.get("title", "") or "未命名任务"
-    tags = item.get("tags", []) or []
+    tags = item.get("tags", []) or[]
     tag_text = ", ".join(tags) if tags else "无标签"
     task_text = item.get("task_text", "")
 
     with st.container(border=True):
         left, right = st.columns([3, 1])
-
         with left:
             st.markdown(f"**{title}**")
             st.caption(f"thread_id: {item['thread_id']}")
             st.write(task_text[:180] + ("..." if len(task_text) > 180 else ""))
             st.caption(f"模板：{item.get('template_name') or '未设置'} | 类型：{item.get('project_type') or '未设置'} | 标签：{tag_text}")
-
         with right:
             status = STATUS_LABELS.get(item.get("status", "UNKNOWN"), item.get("status", "UNKNOWN"))
             st.metric("状态", status)
@@ -934,16 +813,13 @@ def render_task_card(item: Dict[str, Any]) -> None:
                 st.rerun()
 
         with st.expander("摘要", expanded=False):
-            st.json(
-                {
-                    "scene_index": item.get("scene_index"),
-                    "scene_count": item.get("scene_count"),
-                    "final_movie_path": item.get("final_movie_path"),
-                    "abort_reason": item.get("abort_reason"),
-                    "current_scene_script": summary.get("current_scene_script", ""),
-                }
-            )
-
+            st.json({
+                "scene_index": item.get("scene_index"),
+                "scene_count": item.get("scene_count"),
+                "final_movie_path": item.get("final_movie_path"),
+                "abort_reason": item.get("abort_reason"),
+                "current_scene_script": summary.get("current_scene_script", ""),
+            })
 
 def render_recovery_center() -> None:
     st.subheader("恢复中心")
@@ -958,7 +834,6 @@ def render_recovery_center() -> None:
             else:
                 queue_restore_task(latest["thread_id"])
                 st.rerun()
-
     with cols[1]:
         if st.button("新建一个空白任务", use_container_width=True):
             st.session_state.pending_task_defaults = {
@@ -982,7 +857,6 @@ def render_recovery_center() -> None:
             }
             st.session_state.pending_action = "start_new"
             st.rerun()
-
     with cols[2]:
         if st.button("刷新任务列表", use_container_width=True):
             st.rerun()
@@ -991,32 +865,8 @@ def render_recovery_center() -> None:
     if not tasks:
         st.info("还没有历史任务。")
         return
-
     for item in tasks:
         render_task_card(item)
-
-
-def resume_with_decision(decision: Dict[str, Any]) -> None:
-    with st.spinner("继续执行图文视频流水线..."):
-        result = run_graph(Command(resume=decision))
-
-    st.session_state.last_result = result
-    payload = extract_interrupt(result)
-
-    if payload is not None:
-        st.session_state.pending_interrupt = payload
-        persist_task_state_from_thread(st.session_state.thread_id, pending_payload=payload)
-    else:
-        st.session_state.pending_interrupt = None
-        try:
-            snapshot = get_thread_state(st.session_state.thread_id)
-            values = getattr(snapshot, "values", None) or {}
-            if values.get("final_movie_path") or values.get("aborted"):
-                st.session_state.final_state = values
-            persist_task_state_from_thread(st.session_state.thread_id)
-        except Exception:
-            pass
-
 
 def render_interrupt_panel(payload: Dict[str, Any]) -> None:
     stage = payload.get("stage", "unknown")
@@ -1034,7 +884,7 @@ def render_interrupt_panel(payload: Dict[str, Any]) -> None:
             global_setting_edit = st.text_area("全局设定", value=payload.get("global_setting", ""), height=160)
             scenes_text = st.text_area(
                 "分镜列表（JSON 数组）",
-                value=json.dumps(payload.get("scenes", []), ensure_ascii=False, indent=2),
+                value=json.dumps(payload.get("scenes",[]), ensure_ascii=False, indent=2),
                 height=280,
             )
             reason = st.text_input("备注（可选）", value="")
@@ -1048,22 +898,15 @@ def render_interrupt_panel(payload: Dict[str, Any]) -> None:
             except Exception as e:
                 st.error(f"分镜解析失败：{e}")
                 return
-
-            resume_with_decision(
-                {
-                    "action": action,
-                    "task": task_edit,
-                    "global_setting": global_setting_edit,
-                    "scenes": scenes,
-                    "reason": reason,
-                }
-            )
+            resume_with_decision({
+                "action": action, "task": task_edit, "global_setting": global_setting_edit,
+                "scenes": scenes, "reason": reason,
+            })
             st.rerun()
 
     elif stage == "image_review":
         st.subheader("关键帧审片")
         c1, c2 = st.columns([1, 1])
-
         with c1:
             img_url = payload.get("image_url", "")
             if img_url:
@@ -1071,7 +914,6 @@ def render_interrupt_panel(payload: Dict[str, Any]) -> None:
             prev_url = payload.get("reference_image_url")
             if prev_url:
                 st.image(prev_url, caption="上一镜头关键帧", use_container_width=True)
-
         with c2:
             sim = payload.get("embedding_similarity")
             st.metric("Embedding similarity", "N/A" if sim is None else f"{sim:.4f}")
@@ -1080,28 +922,41 @@ def render_interrupt_panel(payload: Dict[str, Any]) -> None:
 
         with st.form("image_review_form"):
             action = st.radio("操作", ["approve", "rewrite", "edit_prompt"], horizontal=True, index=0)
-            edited_prompt = st.text_area(
-                "修改后的 image_prompt",
-                value=payload.get("image_prompt", ""),
-                height=200,
-            )
+            edited_prompt = st.text_area("修改后的 image_prompt", value=payload.get("image_prompt", ""), height=200)
             reason = st.text_input("备注（可选）", value="")
             submitted = st.form_submit_button("提交并继续")
 
         if submitted:
-            resume_with_decision(
-                {
-                    "action": action,
-                    "image_prompt": edited_prompt,
-                    "reason": reason,
-                }
-            )
+            resume_with_decision({"action": action, "image_prompt": edited_prompt, "reason": reason})
+            st.rerun()
+
+    # 新增：尾帧审片界面
+    elif stage == "end_frame_review":
+        st.subheader("尾帧审片")
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            img_url = payload.get("image_url", "")
+            if img_url:
+                st.image(img_url, caption="当前生成的【尾帧】", use_container_width=True)
+            prev_url = payload.get("reference_image_url")
+            if prev_url:
+                st.image(prev_url, caption="参考图：当前镜头的【首帧】", use_container_width=True)
+        with c2:
+            st.text_area("当前尾帧 Prompt", value=payload.get("image_prompt", ""), height=200, disabled=True)
+
+        with st.form("end_frame_review_form"):
+            action = st.radio("操作",["approve", "rewrite", "edit_prompt"], horizontal=True, index=0)
+            edited_prompt = st.text_area("修改后的尾帧 Prompt", value=payload.get("image_prompt", ""), height=200)
+            reason = st.text_input("备注（可选）", value="")
+            submitted = st.form_submit_button("提交并继续")
+
+        if submitted:
+            resume_with_decision({"action": action, "image_prompt": edited_prompt, "reason": reason})
             st.rerun()
 
     elif stage == "video_review":
         st.subheader("视频审片")
         c1, c2 = st.columns([1, 1])
-
         with c1:
             video_url = payload.get("video_url", "")
             if video_url:
@@ -1109,7 +964,6 @@ def render_interrupt_panel(payload: Dict[str, Any]) -> None:
             prev_url = payload.get("reference_image_url")
             if prev_url:
                 st.image(prev_url, caption="上一镜头关键帧", use_container_width=True)
-
         with c2:
             sim = payload.get("embedding_similarity")
             st.metric("Embedding similarity", "N/A" if sim is None else f"{sim:.4f}")
@@ -1117,23 +971,13 @@ def render_interrupt_panel(payload: Dict[str, Any]) -> None:
             st.text_area("自动反馈 / 失败原因", value=payload.get("auto_feedback", ""), height=160, disabled=True)
 
         with st.form("video_review_form"):
-            action = st.radio("操作", ["approve", "rewrite", "edit_prompt"], horizontal=True, index=0)
-            edited_prompt = st.text_area(
-                "修改后的 video_prompt",
-                value=payload.get("video_prompt", ""),
-                height=200,
-            )
+            action = st.radio("操作",["approve", "rewrite", "edit_prompt"], horizontal=True, index=0)
+            edited_prompt = st.text_area("修改后的 video_prompt", value=payload.get("video_prompt", ""), height=200)
             reason = st.text_input("备注（可选）", value="")
             submitted = st.form_submit_button("提交并继续")
 
         if submitted:
-            resume_with_decision(
-                {
-                    "action": action,
-                    "video_prompt": edited_prompt,
-                    "reason": reason,
-                }
-            )
+            resume_with_decision({"action": action, "video_prompt": edited_prompt, "reason": reason})
             st.rerun()
 
     else:
@@ -1149,29 +993,22 @@ def render_interrupt_panel(payload: Dict[str, Any]) -> None:
             except Exception as e:
                 st.error(f"JSON 解析失败：{e}")
 
-
 def render_final_state(final_state: Dict[str, Any]) -> None:
     if final_state.get("aborted"):
         st.error(f"任务中止：{final_state.get('abort_reason') or final_state.get('error_log')}")
         return
-
     movie_path = final_state.get("final_movie_path")
     if movie_path:
         st.success("任务完成")
         st.write(f"最终成片路径：`{movie_path}`")
         if os.path.exists(movie_path):
             st.video(movie_path)
-
-    scenes = final_state.get("scenes", [])
+    scenes = final_state.get("scenes",[])
     if scenes:
         st.subheader("镜头结果")
         st.json(scenes)
 
-
 def get_latest_checkpoint_id(thread_id: str) -> Optional[str]:
-    """
-    优先从最新状态取 checkpoint_id；取不到再从历史里找。
-    """
     try:
         snapshot = get_thread_state(thread_id)
         config = _safe_get(snapshot, "config", {}) or {}
@@ -1182,7 +1019,6 @@ def get_latest_checkpoint_id(thread_id: str) -> Optional[str]:
                 return str(checkpoint_id)
     except Exception:
         pass
-
     try:
         history = list(get_thread_history(thread_id))
         for snap in history:
@@ -1194,70 +1030,41 @@ def get_latest_checkpoint_id(thread_id: str) -> Optional[str]:
                     return str(checkpoint_id)
     except Exception:
         pass
-
     return None
 
-
 def build_fork_tree(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    把 task_registry 里的 parent_thread_id 关系构造成树。
-    返回 roots 列表，每个节点结构：
-    {
-        "task": {...},
-        "children": [ ... ]
-    }
-    """
     node_map: Dict[str, Dict[str, Any]] = {}
-
     for task in tasks:
         thread_id = task["thread_id"]
-        node_map[thread_id] = {
-            "task": task,
-            "children": [],
-        }
-
-    roots: List[Dict[str, Any]] = []
-
+        node_map[thread_id] = {"task": task, "children": []}
+    roots: List[Dict[str, Any]] =[]
     for task in tasks:
         thread_id = task["thread_id"]
         parent_thread_id = task.get("parent_thread_id")
-
-        # 防止自指或父节点不存在
         if parent_thread_id and parent_thread_id in node_map and parent_thread_id != thread_id:
             node_map[parent_thread_id]["children"].append(node_map[thread_id])
         else:
             roots.append(node_map[thread_id])
-
     def sort_node(node: Dict[str, Any]) -> None:
         node["children"].sort(key=lambda n: n["task"].get("updated_at", "") or "", reverse=True)
         for child in node["children"]:
             sort_node(child)
-
     roots.sort(key=lambda n: n["task"].get("updated_at", "") or "", reverse=True)
     for root in roots:
         sort_node(root)
-
     return roots
 
-
-def render_fork_tree_node(
-    node: Dict[str, Any],
-    depth: int = 0,
-    current_thread_id: Optional[str] = None,
-    path_visited: Optional[set] = None,
-) -> None:
+def render_fork_tree_node(node: Dict[str, Any], depth: int = 0, current_thread_id: Optional[str] = None, path_visited: Optional[set] = None) -> None:
     task = node["task"]
     children = node["children"]
     thread_id = task["thread_id"]
 
     if path_visited is None:
         path_visited = set()
-
     if thread_id in path_visited:
         with st.container(border=True):
             st.warning(f"检测到循环引用：{thread_id}")
         return
-
     next_visited = set(path_visited)
     next_visited.add(thread_id)
 
@@ -1265,29 +1072,20 @@ def render_fork_tree_node(
     status = STATUS_LABELS.get(task.get("status", "UNKNOWN"), task.get("status", "UNKNOWN"))
     is_current = thread_id == current_thread_id
     prefix = "🟢" if is_current else "⚪"
-    indent = "　" * depth  # 全角空格，树状缩进更清晰
+    indent = "　" * depth
 
     with st.container(border=True):
         c1, c2, c3, c4 = st.columns([4, 1, 1, 1])
-
         with c1:
             st.markdown(f"{indent}{prefix} **{title}**")
             st.caption(f"thread_id: {thread_id}")
-            st.caption(
-                f"状态: {status} | 阶段: {task.get('stage') or 'unknown'} | "
-                f"模板: {task.get('template_name') or '未设置'} | "
-                f"类型: {task.get('project_type') or '未设置'}"
-            )
+            st.caption(f"状态: {status} | 阶段: {task.get('stage') or 'unknown'} | 模板: {task.get('template_name') or '未设置'} | 类型: {task.get('project_type') or '未设置'}")
             if task.get("parent_thread_id"):
                 st.caption(f"parent_thread_id: {task.get('parent_thread_id')}")
-            if task.get("fork_from_checkpoint_id"):
-                st.caption(f"fork_from_checkpoint_id: {task.get('fork_from_checkpoint_id')}")
-
         with c2:
             if st.button("进入", key=f"tree_enter_{thread_id}"):
                 queue_restore_task(thread_id)
                 st.rerun()
-
         with c3:
             latest_checkpoint_id = get_latest_checkpoint_id(thread_id)
             if latest_checkpoint_id:
@@ -1296,7 +1094,6 @@ def render_fork_tree_node(
                     st.rerun()
             else:
                 st.caption("无 checkpoint")
-
         with c4:
             if st.button("时间轴", key=f"tree_timeline_{thread_id}"):
                 st.session_state.thread_id = thread_id
@@ -1304,15 +1101,9 @@ def render_fork_tree_node(
                 st.rerun()
 
     for child in children:
-        render_fork_tree_node(
-            child,
-            depth=depth + 1,
-            current_thread_id=current_thread_id,
-            path_visited=next_visited,
-        )
+        render_fork_tree_node(child, depth=depth + 1, current_thread_id=current_thread_id, path_visited=next_visited)
 
 def render_checkpoint_timeline(thread_id: str) -> None:
-    """时间轴：显示该 thread 的所有 checkpoint 执行历史"""
     st.subheader("🕒 执行时间轴")
     st.caption(f"thread_id: **{thread_id}**")
 
@@ -1327,29 +1118,20 @@ def render_checkpoint_timeline(thread_id: str) -> None:
 
     st.success(f"共找到 {len(history)} 个 checkpoint（从新到旧排序）")
 
-    # 倒序显示：最新的 checkpoint 在最上面
     for idx, snapshot in enumerate(reversed(history)):
         config = getattr(snapshot, "config", {}) or {}
         configurable = config.get("configurable", {}) or {}
         checkpoint_id = configurable.get("checkpoint_id", f"unknown_{idx}")
-
         metadata = getattr(snapshot, "metadata", {}) or {}
         values = getattr(snapshot, "values", {}) or {}
-        next_nodes = getattr(snapshot, "next", [])
-
+        next_nodes = getattr(snapshot, "next",[])
         step = metadata.get("step", idx + 1)
 
-        with st.expander(
-            f"📍 Checkpoint {len(history) - idx} • Step {step} • "
-            f"ID: `{str(checkpoint_id)[:8]}...`",
-            expanded=(idx == 0)  # 第一个默认展开
-        ):
+        with st.expander(f"📍 Checkpoint {len(history) - idx} • Step {step} • ID: `{str(checkpoint_id)[:8]}...`", expanded=(idx == 0)):
             col1, col2, col3 = st.columns([3, 2, 2])
-
             with col1:
                 st.write(f"**Checkpoint ID**：`{checkpoint_id}`")
                 st.caption(f"下一步节点：{next_nodes}")
-
             with col2:
                 if values.get("final_movie_path"):
                     st.success("✅ 已完成最终成片")
@@ -1357,18 +1139,11 @@ def render_checkpoint_timeline(thread_id: str) -> None:
                     st.error(f"❌ 已中止 - {values.get('abort_reason', '未知原因')}")
                 else:
                     st.info("⏳ 运行中 / 已暂停")
-
             with col3:
-                if st.button(
-                    "🔀 从此分叉",
-                    key=f"timeline_fork_{checkpoint_id}",
-                    use_container_width=True,
-                    type="primary"
-                ):
+                if st.button("🔀 从此分叉", key=f"timeline_fork_{checkpoint_id}", use_container_width=True, type="primary"):
                     prepare_checkpoint_fork_editor(thread_id, str(checkpoint_id))
                     st.rerun()
 
-            # 当前状态简要预览
             summary = summarize_current_state(values)
             with st.expander("📊 当前状态摘要", expanded=False):
                 st.json({
@@ -1377,7 +1152,6 @@ def render_checkpoint_timeline(thread_id: str) -> None:
                     "final_movie_path": bool(summary.get("final_movie_path")),
                     "aborted": summary.get("aborted", False),
                 })
-
                 if summary.get("current_scene_script"):
                     st.caption("当前镜头脚本预览")
                     st.write(summary["current_scene_script"][:280] + "..." if len(summary["current_scene_script"]) > 280 else summary["current_scene_script"])
@@ -1385,57 +1159,45 @@ def render_checkpoint_timeline(thread_id: str) -> None:
 def render_fork_tree_board() -> None:
     st.subheader("任务分叉树")
     st.caption("按 parent_thread_id 组织任务树，绿色节点是当前线程。")
-
     tasks = list_task_states(limit=200)
     if not tasks:
         st.info("当前没有任何任务记录。")
         return
-
     current_thread_id = st.session_state.get("thread_id") or None
     roots = build_fork_tree(tasks)
-
     st.write(f"共 {len(tasks)} 个任务，{len(roots)} 个根节点。")
-
     for root in roots:
         render_fork_tree_node(root, depth=0, current_thread_id=current_thread_id)
-
 
 def render_task_table() -> None:
     st.subheader("任务列表")
     st.caption("按更新时间排序的任务总览。")
-
     tasks = list_task_states(limit=200)
     if not tasks:
         st.info("当前没有历史任务。")
         return
 
-    table_rows = []
+    table_rows =[]
     for item in tasks:
         summary = item.get("summary", {}) or {}
-        table_rows.append(
-            {
-                "thread_id": item["thread_id"],
-                "title": item.get("title", ""),
-                "status": item.get("status", ""),
-                "stage": item.get("stage", ""),
-                "template_name": item.get("template_name", ""),
-                "project_type": item.get("project_type", ""),
-                "tags": ", ".join(item.get("tags", []) or []),
-                "updated_at": item.get("updated_at", ""),
-                "scene_index": item.get("scene_index"),
-                "scene_count": item.get("scene_count"),
-                "final_movie_path": item.get("final_movie_path"),
-                "abort_reason": item.get("abort_reason"),
-                "parent_thread_id": item.get("parent_thread_id"),
-                "fork_from_checkpoint_id": item.get("fork_from_checkpoint_id"),
-                "task_preview": (
-                    item.get("task_text", "")[:90] + "..."
-                    if len(item.get("task_text", "")) > 90
-                    else item.get("task_text", "")
-                ),
-                "current_scene_script": summary.get("current_scene_script", ""),
-            }
-        )
+        table_rows.append({
+            "thread_id": item["thread_id"],
+            "title": item.get("title", ""),
+            "status": item.get("status", ""),
+            "stage": item.get("stage", ""),
+            "template_name": item.get("template_name", ""),
+            "project_type": item.get("project_type", ""),
+            "tags": ", ".join(item.get("tags", []) or[]),
+            "updated_at": item.get("updated_at", ""),
+            "scene_index": item.get("scene_index"),
+            "scene_count": item.get("scene_count"),
+            "final_movie_path": item.get("final_movie_path"),
+            "abort_reason": item.get("abort_reason"),
+            "parent_thread_id": item.get("parent_thread_id"),
+            "fork_from_checkpoint_id": item.get("fork_from_checkpoint_id"),
+            "task_preview": (item.get("task_text", "")[:90] + "..." if len(item.get("task_text", "")) > 90 else item.get("task_text", "")),
+            "current_scene_script": summary.get("current_scene_script", ""),
+        })
 
     st.dataframe(table_rows, use_container_width=True, hide_index=True)
 
@@ -1443,11 +1205,7 @@ def render_task_table() -> None:
         "选择一个 thread_id",
         options=[row["thread_id"] for row in table_rows],
         format_func=lambda tid: next(
-            (
-                f"{tid} | "
-                f"{STATUS_LABELS.get(next((r['status'] for r in table_rows if r['thread_id'] == tid), 'UNKNOWN'), '未知')} | "
-                f"{next((r['stage'] or 'unknown' for r in table_rows if r['thread_id'] == tid), 'unknown')}"
-            ),
+            (f"{tid} | {STATUS_LABELS.get(next((r['status'] for r in table_rows if r['thread_id'] == tid), 'UNKNOWN'), '未知')} | {next((r['stage'] or 'unknown' for r in table_rows if r['thread_id'] == tid), 'unknown')}"),
             tid,
         ),
     )
@@ -1457,42 +1215,30 @@ def render_task_table() -> None:
         if st.button("恢复选中任务", use_container_width=True):
             queue_restore_task(selected_thread_id)
             st.rerun()
-
     with c2:
         if st.button("复制为新任务", use_container_width=True):
             row = next((r for r in table_rows if r["thread_id"] == selected_thread_id), None)
             if row is not None:
                 queue_fork_task(load_task_state(selected_thread_id) or row)
                 st.rerun()
-
     with c3:
         if st.button("打开时间轴", use_container_width=True):
             st.session_state.thread_id = selected_thread_id
             st.session_state.thread_id_input = selected_thread_id
             st.rerun()
 
-
 def render_task_registry() -> None:
     st.subheader("任务看板")
-
-    view_mode = st.radio(
-        "展示模式",
-        ["列表", "分叉树"],
-        horizontal=True,
-        key="task_board_view_mode",
-    )
-
+    view_mode = st.radio("展示模式", ["列表", "分叉树"], horizontal=True, key="task_board_view_mode")
     if view_mode == "列表":
         render_task_table()
     else:
         render_fork_tree_board()
 
-
 def render_current_state() -> None:
     if not st.session_state.thread_id:
         st.info("当前没有 thread_id。")
         return
-
     try:
         snapshot = get_thread_state(st.session_state.thread_id)
         values = getattr(snapshot, "values", None) or {}
@@ -1510,7 +1256,7 @@ def render_current_state() -> None:
     with st.expander("当前 state 原文", expanded=False):
         st.json(values)
 
-    scenes = values.get("scenes", []) or []
+    scenes = values.get("scenes", []) or[]
     if scenes:
         st.markdown("### 镜头摘要")
         for idx, scene in enumerate(scenes):
@@ -1520,20 +1266,16 @@ def render_current_state() -> None:
                     st.markdown(f"**镜头 {idx + 1}**")
                     st.write(scene.get("script", ""))
                 with s2:
-                    st.write(
-                        {
-                            "image_ok": scene.get("is_perfect"),
-                            "video_ok": scene.get("video_is_perfect"),
-                            "image_iterations": scene.get("iterations", 0),
-                            "video_iterations": scene.get("video_iterations", 0),
-                            "similarity": scene.get("embedding_similarity"),
-                        }
-                    )
+                    st.write({
+                        "image_ok": scene.get("is_perfect"),
+                        "last_image_ok": scene.get("last_image_is_perfect"),
+                        "video_ok": scene.get("video_is_perfect"),
+                        "image_iterations": scene.get("iterations", 0),
+                        "last_image_iterations": scene.get("last_image_iterations", 0),
+                        "video_iterations": scene.get("video_iterations", 0),
+                        "similarity": scene.get("embedding_similarity"),
+                    })
 
-
-# =========================
-# Main
-# =========================
 def main() -> None:
     st.set_page_config(page_title="Multimedia HITL Console", layout="wide")
     init_session()
@@ -1545,6 +1287,14 @@ def main() -> None:
     st.caption("这版加入了更完整的任务元数据和更灵活的新手编辑。")
 
     with st.sidebar:
+        st.subheader("任务设置")
+        # 新增：首尾帧双控模式开关
+        st.session_state.task_use_first_last_frame = st.toggle(
+            "启用首尾帧双控生成 (更精准的动作控制，但耗时增加)", 
+            value=st.session_state.get("task_use_first_last_frame", False)
+        )
+        
+        st.divider()
         st.subheader("线程控制")
         st.text_input("thread_id", key="thread_id_input", on_change=sync_thread_from_input)
 
@@ -1586,16 +1336,14 @@ def main() -> None:
                 snapshot = get_thread_state(st.session_state.thread_id)
                 values = getattr(snapshot, "values", None) or {}
                 with st.expander("当前线程摘要", expanded=False):
-                    st.json(
-                        {
-                            "current_scene_index": values.get("current_scene_index"),
-                            "aborted": values.get("aborted"),
-                            "abort_reason": values.get("abort_reason") or values.get("error_log"),
-                            "final_movie_path": values.get("final_movie_path"),
-                            "scene_count": len(values.get("scenes", []) or []),
-                            "reference_images_count": len(values.get("reference_images", []) or []),
-                        }
-                    )
+                    st.json({
+                        "current_scene_index": values.get("current_scene_index"),
+                        "aborted": values.get("aborted"),
+                        "abort_reason": values.get("abort_reason") or values.get("error_log"),
+                        "final_movie_path": values.get("final_movie_path"),
+                        "scene_count": len(values.get("scenes", []) or[]),
+                        "reference_images_count": len(values.get("reference_images", []) or[]),
+                    })
             except Exception as e:
                 st.caption(f"无法读取当前 checkpoint：{e}")
 
@@ -1603,22 +1351,17 @@ def main() -> None:
 
     with tab1:
         render_quick_start_card()
-
     with tab2:
         render_professional_mode()
-
     with tab3:
         render_recovery_center()
-
     with tab4:
         render_checkpoint_fork_editor()
-
     with tab5:
         if st.session_state.thread_id:
             render_checkpoint_timeline(st.session_state.thread_id)
         else:
             st.info("没有可查看的 thread_id。")
-
     with tab6:
         render_current_state()
 
@@ -1631,7 +1374,6 @@ def main() -> None:
     if st.session_state.final_state:
         with st.expander("最终结果", expanded=True):
             render_final_state(st.session_state.final_state)
-
 
 if __name__ == "__main__":
     main()

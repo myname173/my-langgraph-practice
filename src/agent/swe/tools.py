@@ -70,13 +70,29 @@ def _cache_set(cache: dict, key: str, value: str) -> None:
 # ==========================================
 # 工作区与技能目录
 # ==========================================
-WORKSPACE_DIR = Path(
-    os.getenv(
-        "SWE_WORKSPACE_DIR",
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../workspace"))
-    )
-)
-WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+def _resolve_workspace_dir() -> Path:
+    """
+    智能工作区路径探测，优先级：
+    1. 环境变量 SWE_WORKSPACE_DIR
+    2. 容器标准挂载点 /workspace（Docker 沙盒内最常见）
+    3. 相对于本文件的推导路径（本地开发 fallback）
+    """
+    env_path = os.getenv("SWE_WORKSPACE_DIR")
+    if env_path:
+        p = Path(env_path)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    container_path = Path("/workspace")
+    if container_path.exists() and os.access(container_path, os.W_OK):
+        return container_path
+    fallback = Path(os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../../workspace")
+    ))
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+WORKSPACE_DIR = _resolve_workspace_dir()
+logger.info(f"📂 工作区路径: {WORKSPACE_DIR}")
 
 SKILLS_DIR = WORKSPACE_DIR / "skills"
 SKILLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -88,8 +104,14 @@ def normalize_path(file_path: str) -> Path:
     resolve() 解析 symlink + .. 跳转，彻底消除路径穿越。
     """
     if os.path.isabs(file_path):
-        if file_path.startswith("/workspace/"):
-            file_path = file_path.replace("/workspace/", "", 1)
+        # 兼容 /workspace/xxx 和 /workspace（无尾斜杠）两种形式
+        ws_str = str(WORKSPACE_DIR.resolve())
+        fp_str = str(Path(file_path).resolve())
+        if fp_str == ws_str or fp_str.startswith(ws_str + os.sep):
+            # 已经是工作区内的绝对路径，转为相对路径
+            file_path = str(Path(file_path).resolve().relative_to(Path(ws_str)))
+        elif file_path.startswith("/workspace"):
+            file_path = file_path[len("/workspace"):].lstrip("/")
         else:
             raise ValueError(f"禁止使用绝对路径，请使用相对路径: {file_path}")
 
@@ -98,6 +120,30 @@ def normalize_path(file_path: str) -> Path:
     if not str(resolved).startswith(str(workspace_resolved) + os.sep) and resolved != workspace_resolved:
         raise ValueError(f"路径逃逸攻击被拦截: {file_path}")
     return resolved
+
+
+# ==========================================
+# 超时智能推断
+# ==========================================
+_TIMEOUT_RULES: list[tuple[list[str], int]] = [
+    (["npm install", "npm i ", "yarn install", "yarn add",
+      "pip install", "pip3 install", "apt-get install",
+      "apt install", "conda install", "pnpm install",
+      "poetry install", "poetry add"], 300),
+    (["npm run build", "npm build", "vite build", "tsc",
+      "webpack", "rollup", "parcel build", "cargo build",
+      "go build", "make ", "cmake", "gradle build",
+      "mvn package", "mvn install"], 120),
+    ([], 60),
+]
+
+def _infer_timeout(command: str) -> int:
+    """根据命令内容推断合适超时（300s / 120s / 60s）。"""
+    cmd_lower = command.lower()
+    for keywords, seconds in _TIMEOUT_RULES:
+        if keywords and any(kw in cmd_lower for kw in keywords):
+            return seconds
+    return 60
 
 
 # ==========================================
@@ -145,16 +191,25 @@ class DockerSandbox:
             logger.error(f"启动 Docker 容器失败: {e}")
             raise
 
-    def execute(self, command: str, timeout: int = 60) -> str:
+    def execute(self, command: str, timeout: int = 0) -> str:
+        """
+        执行命令。timeout=0 表示自动推断（_infer_timeout）。
+        安装类命令自动使用 300s，编译类 120s，其余 60s。
+        """
         if not self.client:
             return "Error: Docker SDK 未安装或 Docker 引擎未启动。"
         self.start()
+        if timeout == 0:
+            timeout = _infer_timeout(command)
         try:
             cmd_list = ["bash", "-c", f"cd /workspace && timeout {timeout}s bash -c {repr(command)}"]
             exit_code, output = self.container.exec_run(cmd_list, workdir="/workspace")
             out_str = output.decode("utf-8", errors="replace").strip()
             if exit_code == 124:
-                return f"Error: 命令执行超时 (>{timeout}s)。\nOutput:\n{out_str}"
+                return (
+                    f"Error: 命令执行超时 (>{timeout}s)。\nOutput:\n{out_str}\n\n"
+                    f"💡 提示：安装命令请尝试 --prefer-offline 或拆分安装步骤。"
+                )
             return f"Return Code: {exit_code}\nOutput:\n{out_str}"
         except Exception as e:
             return f"Error executing command: {str(e)}"
@@ -335,10 +390,26 @@ def _trigger_index_update(file_path: str) -> None:
 # ==========================================
 @tool
 def execute_command(command: str) -> str:
-    """在安全的 Docker 沙盒环境中执行 Bash/终端命令。"""
-    if ("npm start" in command or "python main.py" in command) and "&" not in command:
-        return "Error: 检测到可能是阻塞命令。请在命令末尾添加 ' &' 以在后台运行，例如 'npm start &'"
-    result = sandbox.execute(command)
+    """
+    在安全的 Docker 沙盒环境中执行 Bash/终端命令。
+    内置优化：
+    - 安装命令自动延长超时（npm install=300s，build=120s）
+    - npm install 自动追加 --prefer-offline 减少网络等待
+    - 阻塞命令检测提示加 & 后台运行
+    """
+    _blocking_pats = ["npm start", "npm run dev", "python main.py",
+                      "python app.py", "uvicorn ", "flask run"]
+    if any(p in command for p in _blocking_pats) and "&" not in command:
+        return (
+            "Error: 检测到可能是阻塞命令。请在命令末尾添加 ' &' 以在后台运行。"
+            " 例如: 'npm run dev &'"
+        )
+    # npm install 自动追加 --prefer-offline（命中本地缓存时极快）
+    optimized = command
+    if re.search(r"\bnpm\s+install\b", command) and "--prefer-offline" not in command:
+        optimized = command.rstrip() + " --prefer-offline"
+        logger.info("⚡ npm install 已自动追加 --prefer-offline")
+    result = sandbox.execute(optimized)
 
     MAX_LEN = 1500
     if len(result) > MAX_LEN:

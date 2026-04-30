@@ -43,3 +43,9 @@ class AgentState(TypedDict):
     code_index_ready: bool
     # 最新的 Repo Map 快照（由 index_builder_node 和工具更新时刷新）
     repo_map: str
+
+    # ── LlamaFactory Training Integration ─────────────────────────────────
+    # 当前轨迹的唯一标识符（由 planner_node 初始化）
+    trajectory_id: str
+    # 轨迹导出路径（trajectory_export_node 执行后填充）
+    training_export_path: str

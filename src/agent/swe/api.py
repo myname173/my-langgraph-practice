@@ -23,10 +23,11 @@ import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Header
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
@@ -46,8 +47,8 @@ from src.agent.swe.evolution import parse_skill_metadata
 # ==========================================
 app = FastAPI(
     title="Savant SWE Agent API",
-    version="1.0.0",
-    description="REST + SSE API for the Savant SWE Agent",
+    version="2.0.0",
+    description="REST + SSE API for the Savant SWE Agent (含 LlamaFactory 训练集成)",
 )
 
 app.add_middleware(
@@ -124,6 +125,32 @@ class TaskResponse(BaseModel):
     task_description: str
 
 
+class TrainingExportRequest(BaseModel):
+    formats: list[str] = Field(
+        default=["sft", "dpo", "grpo", "skills"],
+        description="要导出的格式列表：sft / dpo / grpo / skills",
+    )
+    min_reward_sft: float = Field(default=0.4, ge=0.0, le=1.0, description="SFT 数据的最低奖励阈值")
+    max_dpo_pairs: int = Field(default=500, ge=1, le=5000, description="DPO 训练对最大数量")
+    enrich_with_index: bool = Field(default=True, description="是否用 Three-Index 增强训练指令")
+
+
+class LlamaFactoryConfigRequest(BaseModel):
+    mode: str = Field(..., description="训练范式：sft / dpo / grpo")
+    model_name_or_path: str = Field(..., description="基础模型路径或 HuggingFace 名称")
+    output_dir: str = Field(default="./llamafactory_runs", description="配置文件输出目录")
+    template: str = Field(default="qwen", description="模型对话模板：qwen / llama3 / deepseek 等")
+    adapter_name_or_path: Optional[str] = Field(default=None, description="LoRA checkpoint 路径（DPO 继续训练用）")
+    overrides: Optional[dict] = Field(default=None, description="额外超参数覆盖")
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v: str) -> str:
+        if v not in ("sft", "dpo", "grpo"):
+            raise ValueError("mode 只能是 sft / dpo / grpo")
+        return v
+
+
 # ==========================================
 # 序列化辅助
 # ==========================================
@@ -172,6 +199,9 @@ def _make_initial_state(task: dict) -> dict:
         # Three-Index Code Intelligence
         "code_index_ready": False,
         "repo_map": "",
+        # [v2] 训练集成
+        "trajectory_id": "",
+        "training_export_path": "",
     }
 
 
@@ -182,12 +212,19 @@ def _make_initial_state(task: dict) -> dict:
 @app.get("/api/health")
 async def health():
     """健康检查，无需鉴权。"""
+    training_dir = WORKSPACE_DIR / "_training_data"
+    traj_count = 0
+    if (training_dir / "trajectories.jsonl").exists():
+        with open(training_dir / "trajectories.jsonl", "r") as f:
+            traj_count = sum(1 for line in f if line.strip())
+
     return {
         "status": "ok",
         "workspace": str(WORKSPACE_DIR),
         "skill_count": len(list(SKILLS_DIR.glob("*.py"))),
         "tavily_usage": f"{GLOBAL_STATS['tavily_count']}/{GLOBAL_STATS['max_tavily']}",
         "active_tasks": len(_tasks),
+        "trajectory_count": traj_count,
     }
 
 
@@ -263,6 +300,7 @@ async def get_task(task_id: str):
         "completed_tasks": graph_state.get("completed_tasks", []),
         "evolution_report": graph_state.get("evolution_report", ""),
         "code_index_ready": graph_state.get("code_index_ready", False),
+        "training_export_path": graph_state.get("training_export_path", ""),
         "pending_approval": next_node == "tools",
     }
 
@@ -309,7 +347,6 @@ async def stream_task(task_id: str):
         try:
             _tasks[task_id]["status"] = "running"
             for event in graph.stream(input_data, config=config, stream_mode="updates"):
-                # call_soon_threadsafe 是线程安全的异步入队方式
                 try:
                     loop.call_soon_threadsafe(queue.put_nowait, ("event", event))
                 except asyncio.QueueFull:
@@ -331,20 +368,20 @@ async def stream_task(task_id: str):
                 try:
                     msg_type, data = await asyncio.wait_for(queue.get(), timeout=30.0)
                 except asyncio.TimeoutError:
-                    # 心跳包，防止代理/负载均衡器因长时间无数据而断开连接
                     yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
                     continue
 
                 if msg_type == "done":
-                    # 获取最终状态中的 evolution_report
                     final_report = ""
+                    training_path = ""
                     try:
                         final_state = graph.get_state(config)
                         if final_state and final_state.values:
                             final_report = final_state.values.get("evolution_report", "")
+                            training_path = final_state.values.get("training_export_path", "")
                     except Exception:
                         pass
-                    yield f"data: {json.dumps({'type': 'done', 'task_id': task_id, 'evolution_report': final_report})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'task_id': task_id, 'evolution_report': final_report, 'training_export_path': training_path})}\n\n"
                     break
 
                 elif msg_type == "error":
@@ -356,7 +393,6 @@ async def stream_task(task_id: str):
                         node_name = list(data.keys())[0]
                         serialized = _serialize_event(data)
 
-                        # 检查是否需要工具审批（人在回路）
                         needs_approval = False
                         try:
                             cur_state = graph.get_state(config)
@@ -385,7 +421,7 @@ async def stream_task(task_id: str):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",   # 关闭 Nginx 缓冲，确保实时推送
+            "X-Accel-Buffering": "no",
         },
     )
 
@@ -396,11 +432,6 @@ async def stream_task(task_id: str):
     summary="审批或驳回工具执行请求（人在回路）",
 )
 async def task_action(task_id: str, action: ActionRequest):
-    """
-    当 Agent 请求执行工具（next_node == "tools"）时，
-    客户端可通过此接口批准或驳回，实现人在回路 (Human-in-the-loop)。
-    操作后需重新调用 /stream 以继续执行。
-    """
     if task_id not in _tasks:
         raise HTTPException(status_code=404, detail="Task not found")
 
@@ -423,13 +454,11 @@ async def task_action(task_id: str, action: ActionRequest):
         )
 
     if action.action == "approve":
-        # 批准：直接继续，客户端调用 /stream 即可
         return {
             "status": "approved",
             "message": "工具执行已批准。请重新调用 GET /api/tasks/{task_id}/stream 以继续。",
         }
-
-    else:  # reject
+    else:
         feedback = action.feedback or "请重新检查逻辑。"
         graph.update_state(
             config,
@@ -469,8 +498,6 @@ async def list_skills_api():
     summary="获取技能脚本源码",
 )
 async def get_skill_source(skill_name: str):
-    """返回指定技能脚本的完整源代码。"""
-    # 路径安全校验：只允许纯文件名，禁止路径分隔符
     if (
         "/" in skill_name
         or "\\" in skill_name
@@ -480,7 +507,6 @@ async def get_skill_source(skill_name: str):
         raise HTTPException(status_code=400, detail="非法的 skill_name，只允许纯文件名")
 
     skill_path = SKILLS_DIR / skill_name
-    # resolve 确认未逃逸
     try:
         if not str(skill_path.resolve()).startswith(str(SKILLS_DIR.resolve())):
             raise HTTPException(status_code=400, detail="路径安全检查失败")
@@ -518,12 +544,6 @@ async def delete_task(task_id: str):
     summary="获取代码智能索引统计信息",
 )
 async def get_index_stats_api():
-    """
-    返回 Three-Index 引擎的运行状态：
-    - 已解析的代码块数量
-    - 各层索引是否就绪（AST / 语义向量 / BM25 / 依赖图）
-    - 可用的解析后端（tree-sitter 或 regex fallback）
-    """
     try:
         from src.agent.swe.code_index import get_index_stats
         stats = get_index_stats()
@@ -538,10 +558,6 @@ async def get_index_stats_api():
     summary="获取代码库符号地图（Repo Map）",
 )
 async def get_repo_map_api(query: str = "", max_tokens: int = 2000):
-    """
-    返回工作区所有函数/类的符号地图，按 PageRank 重要性排序。
-    可选 query 参数，相关文件会排在前面。
-    """
     try:
         from src.agent.swe.code_index import get_repo_map_str, get_index_stats
         stats = get_index_stats()
@@ -558,19 +574,7 @@ async def get_repo_map_api(query: str = "", max_tokens: int = 2000):
     dependencies=[Depends(_verify_api_key)],
     summary="三索引代码搜索",
 )
-async def search_code_api(
-    query: str,
-    mode: str = "auto",
-    top_k: int = 8,
-):
-    """
-    对工作区代码库执行三索引融合搜索。
-
-    mode:
-      "auto"     — 自动选择（推荐）
-      "semantic" — 纯语义向量搜索
-      "keyword"  — 纯 BM25 关键字搜索
-    """
+async def search_code_api(query: str, mode: str = "auto", top_k: int = 8):
     if not query.strip():
         raise HTTPException(status_code=400, detail="query 不能为空")
     if mode not in ("auto", "semantic", "keyword"):
@@ -609,15 +613,6 @@ async def search_code_api(
     summary="获取符号的完整上下文（定义 + 调用关系）",
 )
 async def get_symbol_api(symbol_name: str):
-    """
-    返回指定函数/类的：
-    - 完整源码
-    - 函数签名与文档
-    - 调用了哪些函数（callees）
-    - 被哪些函数调用（callers）
-
-    相当于「跳转到定义」+「查找所有引用」。
-    """
     if not symbol_name.strip():
         raise HTTPException(status_code=400, detail="symbol_name 不能为空")
 
@@ -638,11 +633,6 @@ async def get_symbol_api(symbol_name: str):
     summary="手动触发代码索引全量重建",
 )
 async def rebuild_index():
-    """
-    手动触发 Three-Index 全量重建（异步后台执行）。
-    一般情况下索引由 index_builder_node 在任务启动时自动构建，
-    此接口用于手动刷新（如工作区文件被批量修改后）。
-    """
     loop = asyncio.get_event_loop()
 
     def _do_rebuild():
@@ -655,3 +645,198 @@ async def rebuild_index():
 
     loop.run_in_executor(_executor, _do_rebuild)
     return {"status": "rebuilding", "message": "索引重建已在后台启动，请稍后查询 /api/index/stats"}
+
+
+# ==========================================
+# [v2 新增] LlamaFactory 训练集成 API
+# ==========================================
+
+@app.get(
+    "/api/training/stats",
+    dependencies=[Depends(_verify_api_key)],
+    summary="获取训练数据统计",
+)
+async def get_training_stats():
+    """
+    返回当前已积累的训练数据概况：
+      - 总轨迹数量
+      - 成功/失败分布
+      - 平均奖励分
+      - 技能库规模
+      - 已导出的训练文件
+    """
+    training_dir = WORKSPACE_DIR / "_training_data"
+    stats: dict = {
+        "trajectory_count": 0,
+        "success_count": 0,
+        "failed_count": 0,
+        "avg_reward": 0.0,
+        "skill_count": len(list(SKILLS_DIR.glob("*.py"))),
+        "exported_files": [],
+    }
+
+    try:
+        from src.agent.swe.training.trajectory_logger import load_trajectories
+        records = load_trajectories(WORKSPACE_DIR)
+        stats["trajectory_count"] = len(records)
+        stats["success_count"] = sum(1 for r in records if r.status == "success")
+        stats["failed_count"] = sum(1 for r in records if r.status == "failed")
+        if records and any(r.reward != 0.0 for r in records):
+            stats["avg_reward"] = round(
+                sum(r.reward for r in records) / len(records), 4
+            )
+
+        # 列出已导出文件
+        for fname in ["sft_success.jsonl", "dpo_pairs.jsonl", "grpo_all.jsonl", "skills_sft.jsonl"]:
+            fpath = training_dir / fname
+            if fpath.exists():
+                with open(fpath) as f:
+                    line_count = sum(1 for line in f if line.strip())
+                stats["exported_files"].append({
+                    "filename": fname,
+                    "size_bytes": fpath.stat().st_size,
+                    "sample_count": line_count,
+                })
+    except Exception as e:
+        stats["error"] = str(e)
+
+    return stats
+
+
+@app.post(
+    "/api/training/export",
+    dependencies=[Depends(_verify_api_key)],
+    summary="触发训练数据 Pipeline（轨迹 → SFT/DPO/GRPO JSONL）",
+)
+async def export_training_data(
+    request: TrainingExportRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    异步触发完整的训练数据 Pipeline：
+      1. 加载所有历史轨迹
+      2. 计算奖励信号
+      3. 用 Three-Index 增强指令
+      4. 导出 SFT / DPO / GRPO / Skills 格式的 JSONL
+      5. 生成 dataset_info.json（供 LlamaFactory 直接读取）
+
+    注意：Pipeline 在后台线程中运行，接口立即返回 202，
+    通过 GET /api/training/stats 轮询查看进度。
+    """
+    _validate_formats(request.formats)
+
+    def _run_pipeline():
+        try:
+            from src.agent.swe.training.data_pipeline import run_pipeline
+            report = run_pipeline(
+                workspace_dir=WORKSPACE_DIR,
+                formats=request.formats,
+                min_reward_sft=request.min_reward_sft,
+                max_dpo_pairs=request.max_dpo_pairs,
+                enrich_with_index=request.enrich_with_index,
+            )
+            logger.info(f"训练数据 Pipeline 完成: {report['counts']}")
+        except Exception as e:
+            logger.error(f"训练数据 Pipeline 失败: {e}")
+
+    background_tasks.add_task(_run_pipeline)
+    return {
+        "status": "started",
+        "message": "训练数据 Pipeline 已在后台启动。",
+        "training_dir": str(WORKSPACE_DIR / "_training_data"),
+        "formats": request.formats,
+    }
+
+
+@app.post(
+    "/api/training/generate-config",
+    dependencies=[Depends(_verify_api_key)],
+    summary="生成 LlamaFactory YAML 训练配置",
+)
+async def generate_llamafactory_config(request: LlamaFactoryConfigRequest):
+    """
+    生成 LlamaFactory 可直接使用的 YAML 训练配置文件。
+
+    返回：
+      - config_path：配置文件路径
+      - launch_cmd：直接启动训练的命令
+      - config_preview：YAML 内容预览（前 50 行）
+    """
+    try:
+        from src.agent.swe.training.llamafactory_config import generate_and_save_config
+        config_path = generate_and_save_config(
+            mode=request.mode,
+            model_name_or_path=request.model_name_or_path,
+            data_dir=WORKSPACE_DIR / "_training_data",
+            output_dir=Path(request.output_dir) / request.mode,
+            template=request.template,
+            adapter_name_or_path=request.adapter_name_or_path,
+            overrides=request.overrides,
+        )
+        config_preview = config_path.read_text(encoding="utf-8")
+        preview_lines = config_preview.splitlines()[:50]
+        return {
+            "status": "ok",
+            "config_path": str(config_path),
+            "launch_cmd": f"llamafactory-cli train {config_path}",
+            "config_preview": "\n".join(preview_lines),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(
+    "/api/training/trajectories",
+    dependencies=[Depends(_verify_api_key)],
+    summary="列出历史轨迹记录",
+)
+async def list_trajectories(limit: int = 20, min_reward: float = -1.0):
+    """
+    列出已记录的轨迹，支持按奖励过滤。
+    用于观察 Agent 的成功/失败分布，选择高质量样本。
+    """
+    try:
+        from src.agent.swe.training.trajectory_logger import load_trajectories
+        records = load_trajectories(WORKSPACE_DIR)
+
+        # 奖励过滤
+        if min_reward > -1.0:
+            records = [r for r in records if r.reward >= min_reward]
+
+        # 倒序（最新的在前）
+        records = list(reversed(records))[:limit]
+
+        return {
+            "total": len(records),
+            "trajectories": [
+                {
+                    "trajectory_id": r.trajectory_id,
+                    "timestamp": r.timestamp,
+                    "task_description": r.task_description[:100],
+                    "status": r.status,
+                    "test_passed": r.test_passed,
+                    "iteration_count": r.iteration_count,
+                    "tool_calls": len(r.tool_call_steps),
+                    "reward": r.reward,
+                    "reward_breakdown": r.reward_breakdown,
+                    "evolved_skill": r.evolved_skill_name,
+                }
+                for r in records
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# 内部辅助
+# ==========================================
+
+def _validate_formats(formats: list) -> None:
+    valid = {"sft", "dpo", "grpo", "skills"}
+    invalid = set(formats) - valid
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的格式: {invalid}。有效选项: {valid}",
+        )

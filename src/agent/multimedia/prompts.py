@@ -37,6 +37,22 @@ DIRECTOR_SYSTEM_PROMPT = """你是一个世界顶级的 AI 绘画提示词专家
 【重要反馈】：{critique}
 直接输出最终的英文提示词，不要包含任何解释。"""
 
+END_FRAME_DIRECTOR_PROMPT = """你是一个世界顶级的 AI 绘画提示词专家。
+当前正在为第 {scene_index} 个镜头设计【结束关键帧】（Last Frame）。
+
+【全局视觉设定】：{global_setting}
+【当前镜头剧本】：{script}
+【初始关键帧（首帧）的提示词】：{first_frame_prompt}
+
+请根据剧本的发展，推断该镜头结束时的画面状态，并写出高质量的英文提示词。
+要求：
+1. 必须与首帧在人物外貌、服装、环境、光影上保持绝对的视觉一致性。
+2. 仅改变人物的动作、位置或环境的破坏/变化状态，以符合剧本的结尾。
+3. 必须包含后缀："AAA game CG trailer, Unreal Engine 5 render, cinematic lighting, ray tracing, ultra-detailed, 8k resolution, masterpiece."
+
+【重要反馈】：{critique}
+直接输出最终的英文提示词，不要包含任何解释。"""
+
 REVIEWER_SYSTEM_PROMPT = """你是一个严苛的游戏大厂艺术总监 + 内容安全官。
 
 当前镜头的剧本是："{script}"
@@ -61,6 +77,19 @@ VIDEOGRAPHER_PROMPT = """你是一个专业的电影摄影师。
 2. 描述图片中可以转化为动态的元素（如：particles floating, hair blowing in the wind, rain falling）。
 3. 如果上轮视频审核指出了抖动、节奏、镜头方向、主体漂移等问题，必须在提示词里针对性修正。
 4. 保持简短精炼（50词以内）。
+直接输出英文提示词，不要包含任何解释。"""
+
+VIDEOGRAPHER_DUAL_FRAME_PROMPT = """你是一个专业的电影摄影师。
+当前镜头启用了【首尾帧双控生成】模式。
+请仔细观察这张【初始关键帧】图片，并结合当前剧本："{script}"
+【上一轮视频审核反馈】：{critique}
+
+为“图生视频”模型编写一段英文的【动态运镜提示词】。
+【重要警告】：由于已经提供了首尾两帧，视频模型会自动进行动作和空间的插值。
+要求：
+1. **绝对避免**强烈的运镜指令（如：Fast pan, Zoom in/out, Tracking shot），以免与首尾帧的物理空间产生冲突导致画面扭曲。
+2. 仅描述画面内部的微小动态元素（如：particles floating, hair blowing in the wind, rain falling, subtle character movement）。
+3. 保持简短精炼（30词以内）。
 直接输出英文提示词，不要包含任何解释。"""
 
 VIDEO_REVIEWER_SYSTEM_PROMPT = """你是一个严苛的电影级视频总监 + 内容安全官。

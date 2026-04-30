@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="虚幻引擎 5 - 下一代实时 3D 创作工具，打造令人惊叹的沉浸式体验">
+    <meta name="keywords" content="Unreal Engine 5, UE5, 游戏开发，3D 渲染，实时渲染，Nanite, Lumen">
+    <meta name="author" content="Epic Games">
+    <meta property="og:title" content="虚幻引擎 5 - 开启实时 3D 新纪元">
+    <meta property="og:description" content="体验下一代游戏开发引擎的强大威力">
+    <meta property="og:type" content="website">
+    <title>虚幻引擎 5 - 开启实时 3D 新纪元</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <span class="logo-text">UE5</span>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="#home" class="nav-link">首页</a></li>
+                <li><a href="#features" class="nav-link">特性</a></li>
+                <li><a href="#showcase" class="nav-link">作品展示</a></li>
+                <li><a href="#download" class="nav-link">下载</a></li>
+            </ul>
+            <button class="nav-toggle" aria-label="切换菜单">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Hero 区域 -->
+    <section id="home" class="hero">
+        <div class="hero-container">
+            <div class="hero-content">
+                <h1 class="hero-title">
+                    <span class="title-gradient">虚幻引擎 5</span>
+                </h1>
+                <p class="hero-subtitle">开启实时 3D 创作的新纪元</p>
+                <p class="hero-description">
+                    体验前所未有的图形保真度、动态全局光照和无限细节的几何体。
+                    Nanite 和 Lumen 技术重新定义实时渲染的可能性。
+                </p>
+                <div class="hero-buttons">
+                    <a href="#download" class="btn btn-primary">免费下载</a>
+                    <a href="#features" class="btn btn-secondary">了解更多</a>
+                </div>
+            </div>
+            <div class="hero-3d" id="hero-3d"></div>
+        </div>
+        <div class="hero-scroll-indicator">
+            <span>向下滚动</span>
+            <div class="scroll-arrow"></div>
+        </div>
+    </section>
+
+    <!-- 特性展示区 -->
+    <section id="features" class="features">
+        <div class="container">
+            <h2 class="section-title">核心特性</h2>
+            <p class="section-subtitle">重新定义实时 3D 创作的可能性</p>
+            
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                            <polyline points="2 17 12 22 22 17"></polyline>
+                            <polyline points="2 12 12 17 22 12"></polyline>
+                        </svg>
+                    </div>
+                    <h3 class="feature-title">Nanite 虚拟化几何体</h3>
+                    <p class="feature-description">
+                        导入由数百万个多边形组成的影视级美术资源，无需担心性能限制。
+                        Nanite 智能流送系统确保每一帧都呈现最佳细节。
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
+                    </div>
+                    <h3 class="feature-title">Lumen 全局光照</h3>
+                    <p class="feature-description">
+                        完全动态的全局光照解决方案，实时响应场景和光源变化。
+                        无需手动烘焙光照，即可实现电影级的光照效果。
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                    </div>
+                    <h3 class="feature-title">World Partition 世界分区</h3>
+                    <p class="feature-description">
+                        自动流送大型开放世界，无需手动设置流送体积。
+                        单个坐标系统让团队协作更加高效。
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                            <path d="M2 17l10 5 10-5"></path>
+                            <path d="M2 12l10 5 10-5"></path>
+                        </svg>
+                    </div>
+                    <h3 class="feature-title">MetaHuman 虚拟人类</h3>
+                    <p class="feature-description">
+                        在几分钟内创建高保真度的数字人类角色。
+                        丰富的自定义选项和逼真的动画系统。
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                        </svg>
+                    </div>
+                    <h3 class="feature-title">Chaos 物理系统</h3>
+                    <p class="feature-description">
+                        全新的物理和破坏系统，提供真实的物体交互体验。
+                        支持大规模破坏模拟和布娃娃物理。
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                            <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                            <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                        </svg>
+                    </div>
+                    <h3 class="feature-title">蓝图可视化脚本</h3>
+                    <p class="feature-description">
+                        无需编写代码即可创建复杂的游戏逻辑。
+                        直观的节点式界面让创意快速实现。
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 页脚 -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-grid">
+                <div class="footer-section">
+                    <h4 class="footer-title">关于虚幻引擎</h4>
+                    <p class="footer-text">
+                        虚幻引擎 5 是 Epic Games 开发的最新一代实时 3D 创作工具，
+                        为游戏开发者、影视制作人和建筑师提供强大的创作能力。
+                    </p>
+                </div>
+                <div class="footer-section">
+                    <h4 class="footer-title">快速链接</h4>
+                    <ul class="footer-links">
+                        <li><a href="#home">首页</a></li>
+                        <li><a href="#features">特性</a></li>
+                        <li><a href="#showcase">作品展示</a></li>
+                        <li><a href="#download">下载</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4 class="footer-title">资源</h4>
+                    <ul class="footer-links">
+                        <li><a href="#">文档中心</a></li>
+                        <li><a href="#">学习资源</a></li>
+                        <li><a href="#">社区论坛</a></li>
+                        <li><a href="#">市场资源</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4 class="footer-title">关注我们</h4>
+                    <div class="social-links">
+                        <a href="#" class="social-link" aria-label="微博">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M10.098 20.323c-.784.785-2.058.785-2.843 0-.785-.785-.785-2.059 0-2.843.785-.785 2.059-.785 2.843 0 .785.784.785 2.058 0 2.843zM7.352 15.425c-.54.54-1.415.54-1.955 0-.54-.54-.54-1.415 0-1.955.54-.54 1.415-.54 1.955 0 .54.54.54 1.415 0 1.955zm12.43-6.002c-.306.306-.8.306-1.106 0-.306-.306-.306-.8 0-1.106.306-.306.8-.306 1.106 0 .306.306.306.8 0 1.106zm-2.21 2.21c-.306.306-.8.306-1.106 0-.306-.306-.306-.8 0-1.106.306-.306.8-.306 1.106 0 .306.306.306.8 0 1.106z"/>
+                            </svg>
+                        </a>
+                        <a href="#" class="social-link" aria-label="微信">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M8.5 13.5c0 .83-.67 1.5-1.5 1.5s-1.5-.67-1.5-1.5.67-1.5 1.5-1.5 1.5.67 1.5 1.5zm5 0c0 .83-.67 1.5-1.5 1.5s-1.5-.67-1.5-1.5.67-1.5 1.5-1.5 1.5.67 1.5 1.5z"/>
+                            </svg>
+                        </a>
+                        <a href="#" class="social-link" aria-label="Bilibili">
+                            <svg viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M4 8h16v8H4z"/>
+                            </svg>
+                        </a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p class="copyright">© 2024 Epic Games, Inc. 保留所有权利。</p>
+                <p class="trademark">虚幻引擎®是 Epic Games, Inc. 的注册商标。</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="main.js"></script>
+</body>
+</html>

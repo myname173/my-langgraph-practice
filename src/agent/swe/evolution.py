@@ -205,6 +205,45 @@ def _safe_skill_name(raw_name: str) -> str:
 
 
 # ==========================================
+# 轨迹回填（Bug 7 修复：新增缺失函数）
+# ==========================================
+
+def _update_trajectory_with_skill(state, skill_path: Path, skill_content: str) -> None:
+    """
+    将已验证的 Skill 信息回填到最新的轨迹记录（JSONL 尾部行更新）。
+    让 data_pipeline 运行时自动将高质量 Skill 纳入 SFT 正样本。
+    失败时静默忽略，不影响主流程。
+    """
+    try:
+        import json as _json
+        from src.agent.swe.training.trajectory_logger import get_training_dir
+
+        training_dir = get_training_dir(WORKSPACE_DIR)
+        traj_path = training_dir / "trajectories.jsonl"
+        if not traj_path.exists():
+            return
+
+        lines = traj_path.read_text(encoding="utf-8").splitlines()
+        if not lines:
+            return
+
+        last_line = lines[-1].strip()
+        if not last_line:
+            return
+
+        record = _json.loads(last_line)
+        record["evolved_skill_name"] = skill_path.name
+        record["evolved_skill_content"] = skill_content[:3000]
+
+        lines[-1] = _json.dumps(record, ensure_ascii=False)
+        traj_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        logger.info(f"轨迹已更新 evolved_skill: {skill_path.name}")
+
+    except Exception as e:
+        logger.debug(f"轨迹 Skill 回填失败（已忽略）: {e}")
+
+
+# ==========================================
 # 演化节点
 # ==========================================
 
@@ -412,6 +451,9 @@ def evolution_verify_node(state: AgentState) -> Dict[str, Any]:
         shutil.copy2(draft_path, target_path)
         draft_path.unlink(missing_ok=True)
         logger.info(f"Evolution.Verify: ✅ Skill 已持久化到 {target_path}")
+
+        # ---- 步骤 4: 回填轨迹记录（供训练 Pipeline 纳入 SFT 正样本） ----
+        _update_trajectory_with_skill(state, target_path, source)
 
         report = (
             f"✅ [Capability Evolution 成功] 新技能已固化入库！\n"

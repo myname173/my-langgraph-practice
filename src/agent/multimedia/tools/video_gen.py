@@ -7,16 +7,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 class FreeTierQuotaExhaustedError(RuntimeError):
-    """当 Free Quota Only 开启且免费额度耗尽时抛出。"""
     pass
-
 
 class VideoSchemaMismatchError(RuntimeError):
-    """视频接口入参 schema 不匹配时抛出，用于自动回退。"""
     pass
-
 
 def _contains_free_tier_quota_error(payload) -> bool:
     try:
@@ -25,22 +20,14 @@ def _contains_free_tier_quota_error(payload) -> bool:
         text = str(payload)
     return "AllocationQuota.FreeTierOnly" in text
 
-
 def _contains_schema_error(payload) -> bool:
-    """
-    识别入参 schema 不匹配类错误。
-    这里兼容当前日志里出现的：
-    - input.media.0.type
-    - first_frame / last_frame / driving_audio / first_clip
-    - InvalidParameter
-    """
     try:
         text = json.dumps(payload, ensure_ascii=False)
     except Exception:
         text = str(payload)
 
     lowered = text.lower()
-    keywords = [
+    keywords =[
         "input.media.0.type",
         "first_frame",
         "last_frame",
@@ -52,12 +39,10 @@ def _contains_schema_error(payload) -> bool:
     ]
     return any(k in lowered for k in keywords)
 
-
 def _extract_error_message(payload) -> str:
     if isinstance(payload, dict):
         return payload.get("message") or payload.get("msg") or str(payload)
     return str(payload)
-
 
 def _build_parameters(
     resolution: str = "1080P",
@@ -74,32 +59,33 @@ def _build_parameters(
         "shot_type": shot_type,
     }
 
+def _build_payload_media_frames(model_name: str, first_frame_url: str, last_frame_url: str, prompt: str) -> dict:
+    """
+    支持单首帧或首尾双帧的 media 结构
+    """
+    media =[
+        {
+            "type": "first_frame",
+            "url": first_frame_url,
+        }
+    ]
+    
+    if last_frame_url:
+        media.append({
+            "type": "last_frame",
+            "url": last_frame_url,
+        })
 
-def _build_payload_media_first_frame(model_name: str, image_url: str, prompt: str) -> dict:
-    """
-    新的 media 结构：把第一帧明确标成 first_frame。
-    你当前报错里服务端明确要求的是 first_frame / last_frame / driving_audio / first_clip。
-    """
     return {
         "model": model_name,
         "input": {
             "prompt": prompt,
-            "media": [
-                {
-                    "type": "first_frame",
-                    "url": image_url,
-                }
-            ],
+            "media": media,
         },
         "parameters": _build_parameters(),
     }
 
-
 def _build_payload_img_url(model_name: str, image_url: str, prompt: str) -> dict:
-    """
-    官方文档仍然给出 img_url 的 first-frame HTTP 调用方式。
-    作为兼容 fallback 保留。
-    """
     return {
         "model": model_name,
         "input": {
@@ -108,7 +94,6 @@ def _build_payload_img_url(model_name: str, image_url: str, prompt: str) -> dict
         },
         "parameters": _build_parameters(),
     }
-
 
 def _submit_task(session: requests.Session, submit_url: str, headers: dict, payload: dict) -> str:
     response = session.post(submit_url, headers=headers, json=payload)
@@ -134,7 +119,6 @@ def _submit_task(session: requests.Session, submit_url: str, headers: dict, payl
         raise Exception(f"视频任务已提交但未返回 task_id: {response_payload}")
 
     return task_id
-
 
 def _poll_task(session: requests.Session, poll_url: str, headers: dict) -> str:
     while True:
@@ -168,14 +152,10 @@ def _poll_task(session: requests.Session, poll_url: str, headers: dict) -> str:
         print("    [视频渲染进度] 视频逐帧生成中，请耐心等待 (约5秒/次)...")
         time.sleep(5)
 
-
-def generate_video_from_image(image_url: str, prompt: str) -> str:
+def generate_video_from_image(image_url: str, prompt: str, last_image_url: str = "") -> str:
     """
     调用通义万相图生视频模型。
-
-    兼容策略：
-    1) 先尝试 media.first_frame 结构（与你当前报错更一致）
-    2) 若仍然是 schema/参数不匹配，再回退到官方文档里的 img_url 结构
+    支持传入 last_image_url 开启首尾帧双控模式。
     """
     api_key = os.getenv("DASHSCOPE_API_KEY", os.getenv("OPENAI_API_KEY"))
     model_name = os.getenv("DASHSCOPE_VIDEO_MODEL", "wan2.7-i2v")
@@ -190,8 +170,8 @@ def generate_video_from_image(image_url: str, prompt: str) -> str:
         "Content-Type": "application/json",
     }
 
-    payload_candidates = [
-        ("media.first_frame", _build_payload_media_first_frame(model_name, image_url, prompt)),
+    payload_candidates =[
+        ("media.frames", _build_payload_media_frames(model_name, image_url, last_image_url, prompt)),
         ("img_url", _build_payload_img_url(model_name, image_url, prompt)),
     ]
 

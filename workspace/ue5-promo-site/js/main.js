@@ -9,7 +9,7 @@
     // DOM 元素引用
     const header = document.querySelector('.header');
     const mobileMenuBtn = document.querySelector('.mobile-menu-btn');
-    const navMenu = document.querySelector('.nav-menu');
+    const navMenu = document.querySelector('.nav-links');
     const navLinks = document.querySelectorAll('.nav-link');
     const heroSection = document.querySelector('.hero');
 

@@ -12,6 +12,9 @@ class MultimediaState(TypedDict):
     current_scene_index: int
     final_movie_path: Optional[str]
     error_log: Optional[str]
+    
+    # 新增：是否启用首尾帧双控模式
+    use_first_last_frame: bool
 
     # 一致性跟踪
     reference_images: List[str]

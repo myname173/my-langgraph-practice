@@ -10,8 +10,10 @@ from .state import MultimediaState
 from .prompts import (
     SHOWRUNNER_PROMPT,
     DIRECTOR_SYSTEM_PROMPT,
+    END_FRAME_DIRECTOR_PROMPT,
     REVIEWER_SYSTEM_PROMPT,
     VIDEOGRAPHER_PROMPT,
+    VIDEOGRAPHER_DUAL_FRAME_PROMPT,
     VIDEO_REVIEWER_SYSTEM_PROMPT,
     SAFETY_PROMPT,
 )
@@ -34,28 +36,23 @@ REWRITE_ACTIONS = {"rewrite", "edit", "edit_prompt", "revise", "modify", "重写
 
 
 def safe_parse_json(response: str) -> dict:
-    """增强版 JSON 解析。"""
     cleaned = response.replace("```json", "").replace("```", "").strip()
-
     try:
         return json.loads(cleaned)
     except Exception:
         pass
-
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(0))
         except Exception:
             pass
-
     match = re.search(r"\{.*\}", response, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(0))
         except Exception:
             pass
-
     raise Exception(f"总导演未按要求输出有效 JSON 对象！原始输出: {response[:500]}...")
 
 
@@ -81,7 +78,6 @@ def _normalize_decision(decision: Any) -> Dict[str, Any]:
         out = {"action": "approve" if decision else "rewrite"}
     else:
         out = {"action": "approve"}
-
     out["action"] = _normalize_action(out.get("action", "approve"))
     return out
 
@@ -89,14 +85,11 @@ def _normalize_decision(decision: Any) -> Dict[str, Any]:
 def _normalize_scenes(scenes_value: Any) -> List[Dict[str, Any]]:
     if scenes_value is None:
         raise ValueError("scenes 不能为空")
-
     if isinstance(scenes_value, str):
         scenes_value = json.loads(scenes_value)
-
     if not isinstance(scenes_value, list):
         raise ValueError("scenes 必须是 list 或 JSON 数组字符串")
-
-    normalized: List[Dict[str, Any]] = []
+    normalized: List[Dict[str, Any]] =[]
     for item in scenes_value:
         if isinstance(item, dict):
             normalized.append(item)
@@ -117,6 +110,15 @@ def _scene_base(script: str) -> Dict[str, Any]:
         "image_url": "",
         "embedding_similarity": None,
         "image_auto_feedback": "",
+        
+        # 尾帧相关字段
+        "last_image_prompt": "",
+        "last_image_url": "",
+        "last_image_iterations": 0,
+        "last_image_critique": "无",
+        "last_image_is_perfect": False,
+        "last_image_auto_feedback": "",
+
         "video_iterations": 0,
         "video_critique": "无",
         "video_is_perfect": False,
@@ -129,7 +131,7 @@ def _scene_base(script: str) -> Dict[str, Any]:
 
 # ================= 节点定义 =================
 def showrunner_node(state: MultimediaState):
-    print("\n--- 👑 [节点1: 总导演] 正在拆解长视频分镜剧本 ---")
+    print("\n--- 👑[节点1: 总导演] 正在拆解长视频分镜剧本 ---")
     prompt = SHOWRUNNER_PROMPT.format(task=state["task"])
     response = call_llm(prompt, "总导演")
 
@@ -152,7 +154,7 @@ def showrunner_node(state: MultimediaState):
         raise Exception(f"内容安全违规: {safety_result}")
     print("    ✅ 初始内容安全审核通过")
 
-    processed_scenes = []
+    processed_scenes =[]
     for i, s in enumerate(raw_scenes):
         scene_item = _scene_base(s.get("script", s.get("description", "")))
         processed_scenes.append(scene_item)
@@ -163,7 +165,7 @@ def showrunner_node(state: MultimediaState):
         "scenes": processed_scenes,
         "current_scene_index": 0,
         "reference_images": [],
-        "reference_embeddings": [],
+        "reference_embeddings":[],
         "aborted": False,
         "abort_reason": None,
         "error_log": None,
@@ -171,9 +173,6 @@ def showrunner_node(state: MultimediaState):
 
 
 def showrunner_review_gate_node(state: MultimediaState):
-    """
-    人工审片闭环 1：总导演审片。
-    """
     payload = {
         "stage": "showrunner_review",
         "title": "总导演人工审片",
@@ -181,7 +180,7 @@ def showrunner_review_gate_node(state: MultimediaState):
         "global_setting": state["global_setting"],
         "scenes": state["scenes"],
         "message": "请审查总导演输出的全局设定与分镜列表。可直接通过，也可修改 global_setting / scenes 后再继续。",
-        "actions": ["approve", "rewrite", "edit_prompt"],
+        "actions":["approve", "rewrite", "edit_prompt"],
     }
     decision = _normalize_decision(interrupt(payload))
 
@@ -241,10 +240,13 @@ def reviewer_node(state: MultimediaState):
     scene = state["scenes"][idx]
     print(f"--- 🧐 [镜头 {idx+1}] 艺术总监 + 一致性引擎审核 ---")
 
+    # 【修复】显式获取上一镜头的图片，优先取尾帧
     previous_image_url = None
-    if idx > 0 and state.get("reference_images"):
-        previous_image_url = state["reference_images"][-1]
-        print(f"    [*] 正在对比上一镜头关键帧: {previous_image_url[-30:]}...")
+    if idx > 0:
+        prev_scene = state["scenes"][idx - 1]
+        previous_image_url = prev_scene.get("last_image_url") or prev_scene.get("image_url")
+        if previous_image_url:
+            print(f"    [*] 正在对比上一镜头关键帧: {previous_image_url[-30:]}...")
 
     similarity_score = None
     if previous_image_url and compute_similarity is not None:
@@ -271,15 +273,14 @@ def reviewer_node(state: MultimediaState):
 
 
 def image_review_gate_node(state: MultimediaState):
-    """
-    人工审片闭环 2：关键帧审片。
-    """
     idx = state["current_scene_index"]
     scene = state["scenes"][idx]
 
+    # 【修复】显式获取上一镜头的图片
     previous_image_url = None
-    if idx > 0 and state.get("reference_images"):
-        previous_image_url = state["reference_images"][-1]
+    if idx > 0:
+        prev_scene = state["scenes"][idx - 1]
+        previous_image_url = prev_scene.get("last_image_url") or prev_scene.get("image_url")
 
     payload = {
         "stage": "image_review",
@@ -293,7 +294,7 @@ def image_review_gate_node(state: MultimediaState):
         "embedding_similarity": scene.get("embedding_similarity"),
         "auto_feedback": scene.get("image_auto_feedback", scene.get("critique", "")),
         "message": "请审核关键帧：可通过、重写，或修改 image_prompt 后继续。",
-        "actions": ["approve", "rewrite", "edit_prompt"],
+        "actions":["approve", "rewrite", "edit_prompt"],
     }
 
     decision = _normalize_decision(interrupt(payload))
@@ -308,7 +309,7 @@ def image_review_gate_node(state: MultimediaState):
         scenes[idx]["is_perfect"] = True
         scenes[idx]["critique"] = "无"
 
-        ref_images = state.get("reference_images", []).copy()
+        ref_images = state.get("reference_images",[]).copy()
         ref_images.append(scenes[idx]["image_url"])
 
         updates = {
@@ -318,7 +319,7 @@ def image_review_gate_node(state: MultimediaState):
 
         if get_image_embedding is not None:
             try:
-                ref_embs = state.get("reference_embeddings", []).copy()
+                ref_embs = state.get("reference_embeddings",[]).copy()
                 ref_embs.append(get_image_embedding(scenes[idx]["image_url"]))
                 updates["reference_embeddings"] = ref_embs
             except Exception as e:
@@ -331,15 +332,107 @@ def image_review_gate_node(state: MultimediaState):
     return {"scenes": scenes}
 
 
+# ================= 新增：尾帧相关节点 =================
+def end_frame_director_node(state: MultimediaState):
+    idx = state["current_scene_index"]
+    scene = state["scenes"][idx]
+    print(f"\n--- 🎬 [镜头 {idx+1}] 导演设计【尾帧】 ---")
+
+    prompt = END_FRAME_DIRECTOR_PROMPT.format(
+        global_setting=state.get("global_setting", ""),
+        script=scene["script"],
+        first_frame_prompt=scene["image_prompt"],
+        critique=scene.get("last_image_critique", "无"),
+        scene_index=idx + 1
+    )
+    last_image_prompt = call_llm(prompt, "导演")
+
+    scenes = state["scenes"].copy()
+    scenes[idx]["last_image_prompt"] = last_image_prompt
+    return {"scenes": scenes}
+
+
+def end_frame_gen_node(state: MultimediaState):
+    idx = state["current_scene_index"]
+    scene = state["scenes"][idx]
+    print(f"--- 🎨[镜头 {idx+1}] 画师渲染【尾帧】 ---")
+
+    # 传入首帧作为参考图，保证高度一致性
+    last_image_url = generate_keyframe(
+        scene["last_image_prompt"], 
+        reference_image_url=scene["image_url"]
+    )
+    
+    scenes = state["scenes"].copy()
+    scenes[idx]["last_image_url"] = last_image_url
+    scenes[idx]["last_image_iterations"] += 1
+    return {"scenes": scenes}
+
+
+def end_frame_review_gate_node(state: MultimediaState):
+    idx = state["current_scene_index"]
+    scene = state["scenes"][idx]
+
+    payload = {
+        "stage": "end_frame_review",
+        "title": f"镜头 {idx + 1} 【尾帧】审片",
+        "scene_index": idx + 1,
+        "script": scene["script"],
+        "image_prompt": scene.get("last_image_prompt", ""),
+        "image_url": scene.get("last_image_url", ""),
+        "reference_image_url": scene.get("image_url", ""), # 首帧作为参考图
+        "message": "请审核尾帧：需确保与首帧视觉一致。可通过、重写，或修改 prompt 后继续。",
+        "actions": ["approve", "rewrite", "edit_prompt"],
+    }
+
+    decision = _normalize_decision(interrupt(payload))
+    action = decision.get("action", "approve")
+    scenes = state["scenes"].copy()
+
+    if decision.get("image_prompt") is not None:
+        scenes[idx]["last_image_prompt"] = str(decision["image_prompt"]).strip()
+
+    if action in APPROVE_ACTIONS:
+        scenes[idx]["last_image_is_perfect"] = True
+        scenes[idx]["last_image_critique"] = "无"
+
+        # 【修复】将尾帧也追加到 reference_images 中，保持历史完整
+        ref_images = state.get("reference_images",[]).copy()
+        ref_images.append(scenes[idx]["last_image_url"])
+
+        updates = {
+            "scenes": scenes,
+            "reference_images": ref_images,
+        }
+
+        if get_image_embedding is not None:
+            try:
+                ref_embs = state.get("reference_embeddings", []).copy()
+                ref_embs.append(get_image_embedding(scenes[idx]["last_image_url"]))
+                updates["reference_embeddings"] = ref_embs
+            except Exception as e:
+                print(f"    ⚠️ 记录 embedding 失败，但不影响主流程: {str(e)}")
+
+        return updates
+
+    scenes[idx]["last_image_is_perfect"] = False
+    scenes[idx]["last_image_critique"] = decision.get("reason") or "Human requested rewrite"
+    return {"scenes": scenes}
+# ===================================================
+
+
 def videographer_node(state: MultimediaState):
     idx = state["current_scene_index"]
     scene = state["scenes"][idx]
     print(f"--- 🎥 [镜头 {idx+1}] 摄影师设计运镜 ---")
 
+    # 根据是否开启双帧模式，选择不同的 Prompt
+    prompt_template = VIDEOGRAPHER_DUAL_FRAME_PROMPT if state.get("use_first_last_frame") else VIDEOGRAPHER_PROMPT
+
     video_prompt = design_camera_movement(
         scene["image_url"],
         scene["script"],
-        VIDEOGRAPHER_PROMPT,
+        prompt_template,
         critique=scene.get("video_critique", "无")
     )
     print(f"    [*] 运镜提示词: {video_prompt}")
@@ -358,7 +451,8 @@ def video_gen_node(state: MultimediaState):
     scenes[idx]["video_iterations"] = scenes[idx].get("video_iterations", 0) + 1
 
     try:
-        raw_video_url = generate_video_from_image(scene["image_url"], scene["video_prompt"])
+        last_url = scene.get("last_image_url", "") if state.get("use_first_last_frame") else ""
+        raw_video_url = generate_video_from_image(scene["image_url"], scene["video_prompt"], last_url)
 
         scenes[idx]["raw_video_url"] = raw_video_url
         scenes[idx]["final_video_url"] = raw_video_url
@@ -401,10 +495,13 @@ def video_reviewer_node(state: MultimediaState):
     scene = state["scenes"][idx]
     print(f"--- 🧐 [镜头 {idx+1}] 视频总监 + 安全官审核 ---")
 
+    # 【修复】显式获取上一镜头的图片，优先取尾帧
     previous_image_url = None
-    if idx > 0 and state.get("reference_images"):
-        previous_image_url = state["reference_images"][-1]
-        print(f"    [*] 正在对比上一镜头关键帧: {previous_image_url[-30:]}...")
+    if idx > 0:
+        prev_scene = state["scenes"][idx - 1]
+        previous_image_url = prev_scene.get("last_image_url") or prev_scene.get("image_url")
+        if previous_image_url:
+            print(f"    [*] 正在对比上一镜头关键帧: {previous_image_url[-30:]}...")
 
     feedback = evaluate_video(
         scene["raw_video_url"],
@@ -423,15 +520,14 @@ def video_reviewer_node(state: MultimediaState):
 
 
 def video_review_gate_node(state: MultimediaState):
-    """
-    人工审片闭环 3：视频审片。
-    """
     idx = state["current_scene_index"]
     scene = state["scenes"][idx]
 
+    # 【修复】显式获取上一镜头的图片
     previous_image_url = None
-    if idx > 0 and state.get("reference_images"):
-        previous_image_url = state["reference_images"][-1]
+    if idx > 0:
+        prev_scene = state["scenes"][idx - 1]
+        previous_image_url = prev_scene.get("last_image_url") or prev_scene.get("image_url")
 
     payload = {
         "stage": "video_review",
@@ -470,7 +566,7 @@ def video_review_gate_node(state: MultimediaState):
 def advance_scene_node(state: MultimediaState):
     idx = state["current_scene_index"]
     next_idx = idx + 1
-    print(f"--- ✅ [镜头 {idx+1}] 当前镜头完成，切换到下一镜头 ---")
+    print(f"--- ✅[镜头 {idx+1}] 当前镜头完成，切换到下一镜头 ---")
     return {"current_scene_index": next_idx}
 
 
@@ -492,15 +588,22 @@ def decide_image_quality(state: MultimediaState):
     idx = state["current_scene_index"]
     scene = state["scenes"][idx]
     if scene["is_perfect"] or scene["iterations"] >= 3:
+        if state.get("use_first_last_frame"):
+            return "end_frame_director"
         return "videographer"
     return "director"
 
+def decide_end_frame_quality(state: MultimediaState):
+    idx = state["current_scene_index"]
+    scene = state["scenes"][idx]
+    if scene["last_image_is_perfect"] or scene["last_image_iterations"] >= 3:
+        return "videographer"
+    return "end_frame_director"
 
 def decide_after_video_generation(state: MultimediaState):
     if state.get("aborted"):
         return "abort"
     return "video_reviewer"
-
 
 def decide_video_quality(state: MultimediaState):
     idx = state["current_scene_index"]
@@ -508,7 +611,6 @@ def decide_video_quality(state: MultimediaState):
     if scene["video_is_perfect"] or scene["video_iterations"] >= 3:
         return "advance_scene"
     return "videographer"
-
 
 def decide_next_scene(state: MultimediaState):
     if state["current_scene_index"] < len(state["scenes"]):
@@ -527,6 +629,12 @@ workflow.add_node("director", director_node)
 workflow.add_node("image_generator", image_gen_node)
 workflow.add_node("reviewer", reviewer_node)
 workflow.add_node("image_review", image_review_gate_node)
+
+# 新增尾帧节点
+workflow.add_node("end_frame_director", end_frame_director_node)
+workflow.add_node("end_frame_generator", end_frame_gen_node)
+workflow.add_node("end_frame_review", end_frame_review_gate_node)
+
 workflow.add_node("videographer", videographer_node)
 workflow.add_node("video_generator", video_gen_node)
 workflow.add_node("video_reviewer", video_reviewer_node)
@@ -547,8 +655,21 @@ workflow.add_conditional_edges(
     "image_review",
     decide_image_quality,
     {
+        "end_frame_director": "end_frame_director",
         "videographer": "videographer",
         "director": "director"
+    }
+)
+
+# 尾帧路由
+workflow.add_edge("end_frame_director", "end_frame_generator")
+workflow.add_edge("end_frame_generator", "end_frame_review")
+workflow.add_conditional_edges(
+    "end_frame_review",
+    decide_end_frame_quality,
+    {
+        "videographer": "videographer",
+        "end_frame_director": "end_frame_director"
     }
 )
 
@@ -584,30 +705,19 @@ workflow.add_conditional_edges(
 workflow.add_edge("abort", END)
 workflow.add_edge("stitcher", END)
 
-# 持久化编译：用 SQLite checkpoint
 multimedia_agent = workflow.compile(checkpointer=checkpointer)
 
 
-# ================= 运行时辅助函数 =================
 def get_thread_state(thread_id: str):
-    """读取某个 thread 的最新状态快照。"""
     return multimedia_agent.get_state(make_thread_config(thread_id))
 
-
 def get_thread_history(thread_id: str):
-    """读取某个 thread 的 checkpoint 历史。"""
     return list(multimedia_agent.get_state_history(make_thread_config(thread_id)))
 
-
 def get_latest_interrupt_payload(thread_id: str):
-    """
-    从最新 checkpoint 中尝试恢复 interrupt payload。
-    适用于 app 重启后恢复人审闭环。
-    """
     history = get_thread_history(thread_id)
     if not history:
         return None
-
     latest = history[0]
     tasks = getattr(latest, "tasks", ()) or ()
     for task in tasks:
@@ -615,5 +725,4 @@ def get_latest_interrupt_payload(thread_id: str):
         if interrupts:
             first = interrupts[0]
             return getattr(first, "value", first)
-
     return None

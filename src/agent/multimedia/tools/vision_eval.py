@@ -13,12 +13,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-http_client = httpx.Client(trust_env=False)
+http_client = httpx.Client(trust_env=False, timeout=120.0)
 
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY", os.getenv("DASHSCOPE_API_KEY")),
     base_url=os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-    http_client=http_client
+    http_client=http_client,
+    timeout=120.0,
 )
 
 
@@ -114,7 +115,7 @@ def evaluate_image(
 
     try:
         response = client.chat.completions.create(
-            model="qwen-image-2.0",
+            model=os.getenv("DASHSCOPE_VISION_MODEL", "qwen-image-2.0"),
             messages=[{"role": "user", "content": content}],
             temperature=0.1,
             max_tokens=512
@@ -134,17 +135,18 @@ def evaluate_image(
 
         if "data_inspection_failed" in error_str or "inappropriate content" in error_str:
             fail_msg = (
-                "FAIL: 阿里云内容安全预检拦截（data_inspection_failed）。"
-                "请保持当前题材不变，但降低真实武器细节、明确开火动作和过强写实冲击，"
-                "改为更电影化、风格化的未来都市氛围表达，突出霓虹、雨夜、蒸汽、反射光与角色姿态。"
+                "FAIL: Content safety pre-check flagged this image (data_inspection_failed). "
+                "Please regenerate with the same subject and composition, but reduce realistic violence detail, "
+                "avoid explicit weapon close-ups or blood effects, and shift toward a more stylized, cinematic, "
+                "non-photorealistic artistic expression while preserving the scene's mood and atmosphere."
             )
             print("    ⚠️ [安全拦截] 绿网误判，已转为 FAIL 重绘")
             print(f"    {fail_msg}")
             return fail_msg
 
         print(f"    ⚠️ [审核员接口异常] {str(e)[:200]}")
-        print("    为防止中断，默认放行此图。")
-        return "PASS"
+        print("    转为人工审核（不再自动放行）")
+        return f"FAIL: Reviewer API error — please manually check this image. Error: {str(e)[:150]}"
 
 
 def evaluate_video(
@@ -179,7 +181,7 @@ def evaluate_video(
         content.append({"type": "text", "text": system_msg})
 
         response = client.chat.completions.create(
-            model="qwen3.5-omni-plus-2026-03-15",
+            model=os.getenv("DASHSCOPE_OMNI_MODEL", "qwen3.5-omni-plus-2026-03-15"),
             messages=[{"role": "user", "content": content}],
             temperature=0.1,
             max_tokens=512
@@ -199,17 +201,18 @@ def evaluate_video(
 
         if "data_inspection_failed" in error_str or "inappropriate content" in error_str:
             fail_msg = (
-                "FAIL: 视频内容安全预检拦截（data_inspection_failed）。"
-                "请保持当前题材不变，但降低真实武器细节、明确开火动作和过强写实冲击，"
-                "改为更电影化、风格化的未来都市氛围表达，突出霓虹、雨夜、蒸汽、反射光与角色姿态。"
+                "FAIL: Video content safety pre-check flagged this clip (data_inspection_failed). "
+                "Please regenerate with the same subject and motion, but reduce realistic violence detail, "
+                "avoid explicit weapon close-ups or blood effects, and shift toward a more stylized, cinematic, "
+                "non-photorealistic artistic expression while preserving the scene's mood and atmosphere."
             )
             print("    ⚠️ [安全拦截] 视频审核绿网误判，已转为 FAIL 重绘")
             print(f"    {fail_msg}")
             return fail_msg
 
         print(f"    ⚠️ [视频审核员接口异常] {str(e)[:200]}")
-        print("    为防止中断，默认放行此视频。")
-        return "PASS"
+        print("    转为人工审核（不再自动放行）")
+        return f"FAIL: Video reviewer API error — please manually check this clip. Error: {str(e)[:150]}"
 
     finally:
         if tmp_path and os.path.exists(tmp_path):
@@ -223,14 +226,24 @@ def design_camera_movement(
     image_url: str,
     script: str,
     prompt_template: str,
-    critique: str = "无"
+    critique: str = "无",
+    camera_context: str = "",
+    cross_scene_context: str = "",
 ) -> str:
     """调用全模态模型设计运镜。"""
     system_msg = prompt_template.format(script=script, critique=critique or "无")
 
+    # Inject camera context (shot distance, action focus, angle)
+    if camera_context:
+        system_msg += f"\n\n{camera_context}"
+
+    # Inject cross-scene continuity context
+    if cross_scene_context:
+        system_msg += f"\n\n{cross_scene_context}"
+
     try:
         response = client.chat.completions.create(
-            model="qwen3.5-omni-plus-2026-03-15",
+            model=os.getenv("DASHSCOPE_OMNI_MODEL", "qwen3.5-omni-plus-2026-03-15"),
             messages=[
                 {
                     "role": "user",

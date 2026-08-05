@@ -1,0 +1,688 @@
+{
+  "intent_visual_rules": {
+    "world_building": {
+      "camera": [
+        "extreme wide shot → establish vast environment",
+        "wide shot → establish world scale",
+        "crane up → transcendence, overview",
+        "slow pan → survey scene, reveal information"
+      ],
+      "lighting": [
+        "volumetric fog → depth & mystery",
+        "god rays → divine, hopeful atmosphere",
+        "golden hour or blue hour → mood establishment"
+      ],
+      "motion": [
+        "slow, majestic camera movement",
+        "minimal subject motion, environment dominates"
+      ],
+      "composition": [
+        "rule of thirds with horizon placement",
+        "leading lines into depth",
+        "vast negative space for scale"
+      ],
+      "mood": [
+        "awe",
+        "grandeur",
+        "isolation"
+      ]
+    },
+    "character_introduction": {
+      "camera": [
+        "medium shot → balance character and environment",
+        "orbit shot → character reveal, heroic moment",
+        "dolly in → emotional escalation, focus narrowing",
+        "low angle → power, dominance, heroism"
+      ],
+      "lighting": [
+        "backlight silhouette → hero framing, iconic",
+        "rim light → separation and emphasis",
+        "Rembrandt lighting → dramatic portrait"
+      ],
+      "motion": [
+        "controlled, deliberate movement",
+        "camera orbits or approaches subject"
+      ],
+      "composition": [
+        "centered or rule-of-thirds subject placement",
+        "shallow depth of field to isolate character",
+        "weapon or prop as visual anchor"
+      ],
+      "mood": [
+        "anticipation",
+        "power",
+        "presence"
+      ]
+    },
+    "action": {
+      "camera": [
+        "tracking shot → action continuity, journey",
+        "handheld → urgency, realism, chaos",
+        "dolly in → emotional escalation in combat",
+        "whip pan → surprise, energy burst"
+      ],
+      "lighting": [
+        "high contrast dynamic shadows → intensity",
+        "neon rim light → cyberpunk action aesthetic",
+        "bloom highlight → cinematic intensity",
+        "flickering light → tension, battle damage"
+      ],
+      "motion": [
+        "fast, kinetic camera movement",
+        "subject in constant dynamic motion",
+        "speed ramping between fast and slow-mo"
+      ],
+      "composition": [
+        "diagonal lines for dynamic tension",
+        "tight framing to amplify chaos",
+        "motion blur for speed sensation"
+      ],
+      "mood": [
+        "adrenaline",
+        "chaos",
+        "triumph"
+      ]
+    },
+    "emotional": {
+      "camera": [
+        "close-up → intimacy, tension, emphasis",
+        "extreme close-up → suspense, dramatic focus",
+        "slow dolly in → gradual emotional narrowing",
+        "steadicam follow → immersion, first-person feel"
+      ],
+      "lighting": [
+        "soft diffused light → vulnerability",
+        "backlight silhouette → emotional isolation",
+        "rain reflection → melancholy, realism",
+        "golden hour warmth → nostalgia, connection"
+      ],
+      "motion": [
+        "minimal, slow camera movement",
+        "stillness punctuated by subtle gesture"
+      ],
+      "composition": [
+        "tight close-up filling frame",
+        "negative space around isolated subject",
+        "eye-level or slightly above for intimacy"
+      ],
+      "mood": [
+        "intimacy",
+        "loss",
+        "resolve",
+        "hope"
+      ]
+    },
+    "dialogue": {
+      "camera": [
+        "medium two-shot → balance both subjects in frame",
+        "over-the-shoulder → perspective, conversational depth",
+        "close-up reaction → emotional response to dialogue",
+        "slow push-in → increasing intimacy or tension"
+      ],
+      "lighting": [
+        "soft key light → natural conversational mood",
+        "split lighting → tension, opposing viewpoints",
+        "warm practical lights → comfortable dialogue setting"
+      ],
+      "motion": [
+        "subtle, character-driven movement",
+        "shot-reverse-shot rhythm for exchange",
+        "minimal camera movement, focus on expressions"
+      ],
+      "composition": [
+        "eye-line match between subjects",
+        "balanced framing for equal weight",
+        "shallow DOF to isolate speaker from background"
+      ],
+      "mood": [
+        "intimacy",
+        "tension",
+        "connection"
+      ]
+    },
+    "montage": {
+      "camera": [
+        "quick-cut variety → energy, time compression",
+        "match cut → thematic connection between scenes",
+        "whip pan → rapid transition, urgency",
+        "dutch angle → disorientation, escalating pace"
+      ],
+      "lighting": [
+        "high contrast shifts → time passage, energy changes",
+        "color temperature transitions → mood evolution",
+        "staccato lighting → rhythmic visual beats"
+      ],
+      "motion": [
+        "fast-paced, rhythmic editing",
+        "kinetic transitions between moments",
+        "accelerating tempo toward climax"
+      ],
+      "composition": [
+        "varied framing for visual rhythm",
+        "graphic match cuts for continuity",
+        "jump cuts for energy and surprise"
+      ],
+      "mood": [
+        "energy",
+        "progression",
+        "urgency"
+      ]
+    },
+    "reveal": {
+      "camera": [
+        "slow reveal pan → gradual information disclosure",
+        "push through obstruction → breakthrough, discovery",
+        "low-to-high tilt → scale revelation, awe",
+        "rack focus → shift attention to revealed element"
+      ],
+      "lighting": [
+        "dramatic backlight → silhouette to full reveal",
+        "spotlight emergence → focus on revealed subject",
+        "volumetric light breakthrough → moment of truth"
+      ],
+      "motion": [
+        "slow, deliberate camera approach",
+        "obstruction clearing to reveal subject",
+        "smooth acceleration toward reveal moment"
+      ],
+      "composition": [
+        "foreground obstruction framing → depth reveal",
+        "negative space anticipation → payoff",
+        "centered hero shot at reveal climax"
+      ],
+      "mood": [
+        "anticipation",
+        "awe",
+        "wonder"
+      ]
+    }
+  },
+  "genre_modifiers": {
+    "cyberpunk": {
+      "lighting": [
+        "neon rim light (magenta, cyan, violet)",
+        "rain-soaked surface reflections",
+        "volumetric fog with colored light penetration"
+      ],
+      "palette": [
+        "dark base with neon accent highlights",
+        "chromatic aberration on bright edges"
+      ]
+    },
+    "fantasy": {
+      "lighting": [
+        "volumetric god rays through ancient architecture",
+        "warm torchlight contrasted with cool moonlight",
+        "magical particle luminescence"
+      ],
+      "palette": [
+        "rich earth tones with magical accent colors",
+        "golden highlights on ancient surfaces"
+      ]
+    },
+    "gothic": {
+      "lighting": [
+        "low-key lighting with deep shadows",
+        "candlelight and moonlight only",
+        "backlight silhouette through pointed arches"
+      ],
+      "palette": [
+        "desaturated with selective warm accents",
+        "deep blacks and silver highlights"
+      ]
+    },
+    "post_apocalyptic": {
+      "lighting": [
+        "harsh directional sunlight through dust",
+        "overcast diffused light, flat and bleak",
+        "practical lighting from scavenged sources"
+      ],
+      "palette": [
+        "desaturated earth tones",
+        "rusted metal orange against grey"
+      ]
+    },
+    "sci_fi": {
+      "lighting": [
+        "clean artificial lighting with cool temperature",
+        "holographic and screen-sourced light",
+        "bloom highlight on technology surfaces"
+      ],
+      "palette": [
+        "cool blue-white base with warm human accents",
+        "sterile environments with selective color pops"
+      ]
+    },
+    "horror": {
+      "lighting": [
+        "low-key lighting with deep shadows and flickering sources",
+        "split lighting (half face lit, half in darkness)",
+        "practical light failure (flickering bulbs, dying flashlights)"
+      ],
+      "palette": [
+        "desaturated with selective cold accents (blue-green)",
+        "deep blacks with sickly yellow-green highlights"
+      ]
+    },
+    "competitive": {
+      "lighting": [
+        "neon arena lighting with bloom highlights",
+        "high-saturation stage spotlights with lens flare",
+        "dynamic color shifts during ultimate abilities"
+      ],
+      "palette": [
+        "high saturation with vibrant neon accents",
+        "strong contrast between character highlights and dark arena backgrounds"
+      ]
+    }
+  },
+  "trailer_pacing": {
+    "opening": {
+      "pacing": "slow, deliberate",
+      "cut_rhythm": "long holds, minimal cuts"
+    },
+    "build_up": {
+      "pacing": "accelerating",
+      "cut_rhythm": "gradually shorter holds"
+    },
+    "climax": {
+      "pacing": "fast, explosive",
+      "cut_rhythm": "rapid cuts, high energy"
+    },
+    "resolution": {
+      "pacing": "decelerate to stillness",
+      "cut_rhythm": "slow fade, final breath"
+    }
+  },
+  "intent_keywords": {
+    "world_building": {
+      "全景": 3.0,
+      "远景": 3.0,
+      "俯瞰": 3.0,
+      "鸟瞰": 3.0,
+      "城市": 2.0,
+      "世界": 2.5,
+      "大陆": 3.0,
+      "天空": 2.0,
+      "地平线": 3.0,
+      "山脉": 2.5,
+      "荒原": 2.5,
+      "废墟": 2.0,
+      "城堡": 2.0,
+      "都市": 2.0,
+      "星际": 2.5,
+      "宇宙": 2.5,
+      "establishing": 3.0,
+      "landscape": 2.5,
+      "panorama": 3.0,
+      "vast": 2.5,
+      "horizon": 3.0,
+      "aerial": 3.0
+    },
+    "character_introduction": {
+      "登场": 3.0,
+      "出场": 3.0,
+      "现身": 3.0,
+      "亮相": 3.0,
+      "走来": 2.0,
+      "站起": 2.0,
+      "拔剑": 2.5,
+      "穿上": 2.0,
+      "凝视": 2.0,
+      "目光": 2.0,
+      "面容": 2.5,
+      "身影": 2.0,
+      "reveal": 3.0,
+      "entrance": 3.0,
+      "hero": 2.5,
+      "protagonist": 2.5,
+      "character": 2.0,
+      "silhouette": 2.0
+    },
+    "action": {
+      "战斗": 3.0,
+      "攻击": 3.0,
+      "冲锋": 3.0,
+      "挥剑": 3.0,
+      "爆炸": 3.0,
+      "追逐": 3.0,
+      "闪避": 3.0,
+      "射击": 3.0,
+      "碰撞": 2.5,
+      "飞跃": 2.5,
+      "奔跑": 2.5,
+      "格斗": 3.0,
+      "释放": 2.0,
+      "开火": 3.0,
+      "冲击": 2.5,
+      "粉碎": 2.5,
+      "combat": 3.0,
+      "attack": 3.0,
+      "chase": 3.0,
+      "explosion": 3.0,
+      "slash": 3.0,
+      "battle": 3.0,
+      "fight": 3.0,
+      "strike": 2.5
+    },
+    "emotional": {
+      "回忆": 3.0,
+      "告别": 3.0,
+      "眼泪": 3.0,
+      "微笑": 2.5,
+      "沉默": 2.5,
+      "拥抱": 3.0,
+      "祈祷": 2.5,
+      "誓言": 2.5,
+      "失去": 3.0,
+      "希望": 2.0,
+      "决心": 2.0,
+      "思念": 2.5,
+      "孤独": 2.5,
+      "温暖": 2.0,
+      "承诺": 2.5,
+      "遗言": 3.0,
+      "whisper": 2.5,
+      "tears": 3.0,
+      "farewell": 3.0,
+      "memory": 2.5,
+      "silent": 2.5,
+      "hope": 2.0,
+      "resolve": 2.0
+    },
+    "dialogue": {
+      "对话": 3.0,
+      "交谈": 3.0,
+      "谈话": 3.0,
+      "讨论": 2.5,
+      "争吵": 2.5,
+      "告白": 2.5,
+      "采访": 3.0,
+      "两人": 2.0,
+      "面对面": 2.5,
+      "对质": 2.5,
+      "倾诉": 2.5,
+      "dialogue": 3.0,
+      "conversation": 3.0,
+      "interview": 3.0,
+      "talking": 2.5,
+      "debate": 2.5,
+      "confession": 2.5,
+      "two-shot": 2.0,
+      "over-the-shoulder": 2.5
+    },
+    "montage": {
+      "蒙太奇": 3.0,
+      "快剪": 3.0,
+      "剪辑": 2.5,
+      "闪回": 2.5,
+      "回忆": 2.0,
+      "时间流逝": 3.0,
+      "快速": 2.0,
+      "连续": 2.0,
+      "片段": 2.0,
+      "集锦": 2.5,
+      "混剪": 3.0,
+      "训练": 2.0,
+      "montage": 3.0,
+      "quick cuts": 3.0,
+      "time lapse": 3.0,
+      "sequence": 2.0,
+      "compilation": 2.5,
+      "training": 2.0,
+      "flashback": 2.5,
+      "accelerated": 2.0
+    },
+    "reveal": {
+      "展示": 3.0,
+      "揭晓": 3.0,
+      "亮相": 3.0,
+      "登场": 2.5,
+      "产品": 3.0,
+      "展现": 2.5,
+      " unveil": 3.0,
+      "揭示": 3.0,
+      "发现": 2.5,
+      "揭幕": 3.0,
+      "呈现": 2.5,
+      "首次": 2.0,
+      "reveal": 3.0,
+      "showcase": 3.0,
+      "product": 3.0,
+      "unveil": 3.0,
+      "discovery": 2.5,
+      "present": 2.5,
+      "launch": 2.5,
+      "first look": 3.0,
+      "spotlight": 2.5
+    }
+  },
+  "genre_keywords": {
+    "cyberpunk": [
+      "赛博朋克",
+      "霓虹",
+      "全息",
+      "机械",
+      "义体",
+      "黑客",
+      "cyberpunk",
+      "neon",
+      "hologram",
+      "cyber",
+      "android"
+    ],
+    "fantasy": [
+      "奇幻",
+      "魔法",
+      "精灵",
+      "龙",
+      "巫师",
+      "神剑",
+      "圣殿",
+      "fantasy",
+      "magic",
+      "dragon",
+      "wizard",
+      "enchanted",
+      "elf"
+    ],
+    "gothic": [
+      "哥特",
+      "暗黑",
+      "古堡",
+      "吸血鬼",
+      "月光",
+      "阴影",
+      "gothic",
+      "dark",
+      "cathedral",
+      "vampire",
+      "moonlit"
+    ],
+    "post_apocalyptic": [
+      "废土",
+      "末世",
+      "末日",
+      "荒芜",
+      "辐射",
+      "变异",
+      "post-apocalyptic",
+      "wasteland",
+      "fallout",
+      "ruins",
+      "desolate"
+    ],
+    "sci_fi": [
+      "科幻",
+      "太空",
+      "星际",
+      "空间站",
+      "飞船",
+      "量子",
+      "sci-fi",
+      "space",
+      "starship",
+      "station",
+      "quantum"
+    ],
+    "horror": [
+      "horror",
+      "thriller",
+      "mystery",
+      "恐怖",
+      "惊悚",
+      "悬疑",
+      "鬼魂",
+      "诅咒",
+      "黑暗",
+      "魔鬼",
+      "僵尸",
+      "血腥",
+      "haunted",
+      "creepy",
+      "dread",
+      "nightmare",
+      "eerie",
+      "sinister"
+    ],
+    "competitive": [
+      "competitive",
+      "esports",
+      "pvp",
+      "竞技",
+      "对战",
+      "排位",
+      "格斗",
+      "射击",
+      "竞赛",
+      "锦标赛",
+      "天梯",
+      "arena",
+      "tournament",
+      "fighting",
+      "shooter",
+      "multiplayer",
+      "versus"
+    ]
+  },
+  "ambient_keywords": {
+    "night": {
+      "夜": 3.0,
+      "夜晚": 3.0,
+      "深夜": 3.0,
+      "暗夜": 3.0,
+      "黑夜": 3.0,
+      "月光": 2.5,
+      "月色": 2.5,
+      "星空": 2.5,
+      "夜空": 2.5,
+      "night": 3.0,
+      "nighttime": 3.0,
+      "midnight": 3.0,
+      "dark": 2.0,
+      "moonlight": 2.5,
+      "moonlit": 2.5,
+      "starlight": 2.5,
+      "nocturnal": 3.0
+    },
+    "rain": {
+      "雨": 3.0,
+      "暴雨": 3.0,
+      "细雨": 2.5,
+      "大雨": 3.0,
+      "雷雨": 3.0,
+      "雨水": 3.0,
+      "雨夜": 3.0,
+      "雨幕": 2.5,
+      "湿澉": 2.0,
+      "湿润": 2.0,
+      "rain": 3.0,
+      "rainy": 3.0,
+      "storm": 2.5,
+      "downpour": 3.0,
+      "drizzle": 2.5,
+      "rainstorm": 3.0,
+      "wet": 1.5
+    },
+    "dawn": {
+      "黎明": 3.0,
+      "拂晓": 3.0,
+      "曙光": 3.0,
+      "晨曦": 3.0,
+      "破晓": 3.0,
+      "日出": 3.0,
+      "清晨": 2.5,
+      "朝阳": 3.0,
+      "dawn": 3.0,
+      "sunrise": 3.0,
+      "first light": 3.0,
+      "daybreak": 3.0
+    },
+    "dusk": {
+      "黄昏": 3.0,
+      "日落": 3.0,
+      "夕阳": 3.0,
+      "暮色": 3.0,
+      "傍晚": 2.5,
+      "dusk": 3.0,
+      "sunset": 3.0,
+      "twilight": 3.0,
+      "golden hour": 2.5
+    }
+  },
+  "ambient_lighting_overrides": {
+    "night": [
+      "practical neon and streetlamp light → urban nightscape illumination",
+      "moonlight as secondary fill → cool silver-blue ambient light from above",
+      "high contrast between lit areas and deep shadow → noir atmosphere"
+    ],
+    "rain": [
+      "volumetric rain illuminated by practical light sources → visible rain streaks",
+      "wet surface reflections amplifying all light sources → doubled luminance on ground",
+      "diffused ambient through rain curtain → softened contrast, hazy glow"
+    ],
+    "night+rain": [
+      "neon light reflecting off rain-wet surfaces → doubled color saturation on ground",
+      "volumetric rain streaks lit by practical neon sources → visible colored rain",
+      "deep shadows with selective neon rim light → high contrast noir-rain atmosphere",
+      "no natural light sources (no sun, no golden hour, no god rays) → purely artificial lighting"
+    ],
+    "dawn": [
+      "low-angle warm light breaking through atmosphere → directional golden-orange key light",
+      "cool ambient fill from remaining night sky → warm-cool split lighting",
+      "long shadows and volumetric haze → dramatic early-morning atmosphere"
+    ],
+    "dusk": [
+      "low-angle warm golden light → directional sunset key light from horizon",
+      "warm sky gradient as ambient fill → orange-to-purple overhead gradient",
+      "long shadows and silhouette potential → high contrast with warm highlights"
+    ]
+  },
+  "ambient_filter_keywords": {
+    "night": [
+      "golden hour",
+      "god rays",
+      "blue hour"
+    ],
+    "rain": [
+      "god rays"
+    ],
+    "night+rain": [
+      "golden hour",
+      "god rays",
+      "blue hour"
+    ],
+    "dawn": [
+      "god rays",
+      "blue hour"
+    ],
+    "dusk": []
+  },
+  "ambient_warning_text": {
+    "night": "Never use sunlight, golden hour, or god rays. All light sources must be artificial (neon, streetlamps, screens) or moonlight.",
+    "rain": "Avoid harsh directional sunlight. Light should be diffused through rain curtain; emphasize wet surface reflections.",
+    "night+rain": "Never use sunlight, golden hour, or god rays. All illumination comes from neon/artificial sources reflecting off rain-wet surfaces.",
+    "dawn": "Use only low-angle warm directional light from the horizon. Avoid overhead noon sun or harsh god rays.",
+    "dusk": "Use warm golden sunset light from low angles. Avoid cool blue tones or overhead midday lighting."
+  }
+}

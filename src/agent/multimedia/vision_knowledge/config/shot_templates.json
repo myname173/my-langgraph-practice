@@ -1,0 +1,521 @@
+{
+  "shot_templates": {
+    "action": [
+      {
+        "shot_name": "establish",
+        "camera": {
+          "type": "wide shot",
+          "movement": "slow dolly in",
+          "angle": "low angle",
+          "lens": "24mm wide",
+          "orientation": "three_quarter",
+          "tracking": "observe_from_distance"
+        },
+        "lighting": {
+          "setup": "high contrast with volumetric haze",
+          "contrast": "high"
+        },
+        "emotion": "anticipation",
+        "pacing_weight": 0.15,
+        "focus_category": "environment"
+      },
+      {
+        "shot_name": "movement",
+        "camera": {
+          "type": "tracking shot",
+          "movement": "fast lateral tracking",
+          "angle": "eye level",
+          "lens": "35mm",
+          "orientation": "side_profile",
+          "tracking": "track_parallel"
+        },
+        "lighting": {
+          "setup": "dynamic directional light with motion blur",
+          "contrast": "high"
+        },
+        "emotion": "adrenaline",
+        "pacing_weight": 0.35,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "impact",
+        "camera": {
+          "type": "close-up",
+          "movement": "handheld shake with slow-mo",
+          "angle": "low angle",
+          "lens": "85mm telephoto",
+          "orientation": "facing_camera",
+          "tracking": "push_toward_subject"
+        },
+        "lighting": {
+          "setup": "dramatic backlight with bloom and sparks",
+          "contrast": "extreme"
+        },
+        "emotion": "intensity",
+        "pacing_weight": 0.35,
+        "focus_category": "action"
+      },
+      {
+        "shot_name": "aftermath",
+        "camera": {
+          "type": "wide shot",
+          "movement": "slow crane ascending",
+          "angle": "high angle",
+          "lens": "24mm wide",
+          "orientation": "back_to_camera",
+          "tracking": "rise_above"
+        },
+        "lighting": {
+          "setup": "settling dust with residual atmospheric glow",
+          "contrast": "medium"
+        },
+        "emotion": "triumph",
+        "pacing_weight": 0.15,
+        "focus_category": "environment"
+      }
+    ],
+    "world_building": [
+      {
+        "shot_name": "panorama",
+        "camera": {
+          "type": "extreme wide shot",
+          "movement": "slow horizontal pan",
+          "angle": "eye level",
+          "lens": "16mm ultra-wide",
+          "orientation": "three_quarter",
+          "tracking": "observe_panorama"
+        },
+        "lighting": {
+          "setup": "golden hour with volumetric god rays",
+          "contrast": "low"
+        },
+        "emotion": "awe",
+        "pacing_weight": 0.3,
+        "focus_category": "environment"
+      },
+      {
+        "shot_name": "sweep",
+        "camera": {
+          "type": "wide shot",
+          "movement": "slow crane ascending",
+          "angle": "low angle to high",
+          "lens": "24mm wide",
+          "orientation": "back_to_camera",
+          "tracking": "ascend_behind"
+        },
+        "lighting": {
+          "setup": "atmospheric fog with diffused ambient light",
+          "contrast": "low"
+        },
+        "emotion": "grandeur",
+        "pacing_weight": 0.3,
+        "focus_category": "environment"
+      },
+      {
+        "shot_name": "scale_reveal",
+        "camera": {
+          "type": "medium shot",
+          "movement": "slow dolly in",
+          "angle": "low angle",
+          "lens": "50mm",
+          "orientation": "three_quarter",
+          "tracking": "push_toward_subject"
+        },
+        "lighting": {
+          "setup": "rim light on subject against vast background",
+          "contrast": "medium"
+        },
+        "emotion": "insignificance",
+        "pacing_weight": 0.25,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "atmosphere",
+        "camera": {
+          "type": "wide shot",
+          "movement": "static with subtle drift",
+          "angle": "eye level",
+          "lens": "35mm",
+          "orientation": "back_to_camera",
+          "tracking": "drift_behind"
+        },
+        "lighting": {
+          "setup": "moody atmospheric haze with distant light source",
+          "contrast": "medium"
+        },
+        "emotion": "mystery",
+        "pacing_weight": 0.15,
+        "focus_category": "environment"
+      }
+    ],
+    "character_introduction": [
+      {
+        "shot_name": "silhouette",
+        "camera": {
+          "type": "wide shot",
+          "movement": "static locked",
+          "angle": "low angle",
+          "lens": "35mm",
+          "orientation": "back_to_camera",
+          "tracking": "static_observe"
+        },
+        "lighting": {
+          "setup": "strong backlight silhouette against dramatic sky",
+          "contrast": "high"
+        },
+        "emotion": "anticipation",
+        "pacing_weight": 0.2,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "reveal",
+        "camera": {
+          "type": "medium shot",
+          "movement": "slow orbit from behind",
+          "angle": "eye level",
+          "lens": "50mm",
+          "orientation": "three_quarter_reveal",
+          "tracking": "orbit_to_face"
+        },
+        "lighting": {
+          "setup": "gradual rim light transitioning to full key light",
+          "contrast": "medium"
+        },
+        "emotion": "presence",
+        "pacing_weight": 0.35,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "detail",
+        "camera": {
+          "type": "close-up",
+          "movement": "slow dolly in",
+          "angle": "eye level",
+          "lens": "85mm telephoto",
+          "orientation": "facing_camera",
+          "tracking": "push_toward_subject"
+        },
+        "lighting": {
+          "setup": "Rembrandt lighting with warm key light",
+          "contrast": "medium"
+        },
+        "emotion": "intimacy",
+        "pacing_weight": 0.25,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "stance",
+        "camera": {
+          "type": "medium shot",
+          "movement": "slow dolly out",
+          "angle": "low angle",
+          "lens": "35mm",
+          "orientation": "side_profile",
+          "tracking": "orbit_around"
+        },
+        "lighting": {
+          "setup": "full cinematic lighting with environment context",
+          "contrast": "medium"
+        },
+        "emotion": "power",
+        "pacing_weight": 0.2,
+        "focus_category": "character"
+      }
+    ],
+    "emotional": [
+      {
+        "shot_name": "close_up",
+        "camera": {
+          "type": "extreme close-up",
+          "movement": "very slow dolly in",
+          "angle": "eye level",
+          "lens": "100mm macro",
+          "orientation": "facing_camera",
+          "tracking": "intimate_push"
+        },
+        "lighting": {
+          "setup": "soft diffused window light with shallow DOF",
+          "contrast": "low"
+        },
+        "emotion": "vulnerability",
+        "pacing_weight": 0.35,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "stillness",
+        "camera": {
+          "type": "medium shot",
+          "movement": "static locked tripod",
+          "angle": "eye level",
+          "lens": "50mm",
+          "orientation": "three_quarter",
+          "tracking": "static_observe"
+        },
+        "lighting": {
+          "setup": "single practical light source, deep shadows",
+          "contrast": "high"
+        },
+        "emotion": "isolation",
+        "pacing_weight": 0.25,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "subtle_motion",
+        "camera": {
+          "type": "close-up",
+          "movement": "gentle handheld drift",
+          "angle": "slight high angle",
+          "lens": "85mm",
+          "orientation": "over_shoulder",
+          "tracking": "gentle_follow"
+        },
+        "lighting": {
+          "setup": "warm backlight with subtle particle atmosphere",
+          "contrast": "low"
+        },
+        "emotion": "tenderness",
+        "pacing_weight": 0.25,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "fade",
+        "camera": {
+          "type": "wide shot",
+          "movement": "slow dolly out pulling away",
+          "angle": "high angle",
+          "lens": "35mm",
+          "orientation": "back_to_camera",
+          "tracking": "pull_away"
+        },
+        "lighting": {
+          "setup": "fading light, increasing negative space",
+          "contrast": "low"
+        },
+        "emotion": "loss",
+        "pacing_weight": 0.15,
+        "focus_category": "environment"
+      }
+    ],
+    "dialogue": [
+      {
+        "shot_name": "two_shot",
+        "camera": {
+          "type": "medium two-shot",
+          "movement": "static",
+          "angle": "eye level",
+          "lens": "50mm standard",
+          "orientation": "three_quarter",
+          "tracking": "static_observe"
+        },
+        "lighting": {
+          "setup": "soft key light with gentle fill",
+          "contrast": "low"
+        },
+        "emotion": "connection",
+        "pacing_weight": 0.25,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "over_shoulder",
+        "camera": {
+          "type": "over-the-shoulder",
+          "movement": "slow push in",
+          "angle": "eye level",
+          "lens": "85mm portrait",
+          "orientation": "over_shoulder",
+          "tracking": "intimate_push"
+        },
+        "lighting": {
+          "setup": "split lighting with motivated source",
+          "contrast": "medium"
+        },
+        "emotion": "intimacy",
+        "pacing_weight": 0.3,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "reaction",
+        "camera": {
+          "type": "close-up",
+          "movement": "static with subtle drift",
+          "angle": "slight low angle",
+          "lens": "85mm portrait",
+          "orientation": "facing_camera",
+          "tracking": "gentle_follow"
+        },
+        "lighting": {
+          "setup": "Rembrandt lighting with eye light",
+          "contrast": "medium"
+        },
+        "emotion": "tension",
+        "pacing_weight": 0.25,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "exchange",
+        "camera": {
+          "type": "medium shot",
+          "movement": "slow lateral track",
+          "angle": "eye level",
+          "lens": "35mm standard",
+          "orientation": "side_profile",
+          "tracking": "track_parallel"
+        },
+        "lighting": {
+          "setup": "naturalistic ambient with motivated key",
+          "contrast": "low"
+        },
+        "emotion": "presence",
+        "pacing_weight": 0.2,
+        "focus_category": "character"
+      }
+    ],
+    "montage": [
+      {
+        "shot_name": "flash",
+        "camera": {
+          "type": "medium shot",
+          "movement": "whip pan",
+          "angle": "dynamic angle",
+          "lens": "24mm wide",
+          "orientation": "three_quarter",
+          "tracking": "observe_panorama"
+        },
+        "lighting": {
+          "setup": "high contrast with rapid shifts",
+          "contrast": "high"
+        },
+        "emotion": "adrenaline",
+        "pacing_weight": 0.35,
+        "focus_category": "environment"
+      },
+      {
+        "shot_name": "match_cut",
+        "camera": {
+          "type": "medium close-up",
+          "movement": "dolly in",
+          "angle": "matching angle",
+          "lens": "50mm standard",
+          "orientation": "facing_camera",
+          "tracking": "push_toward_subject"
+        },
+        "lighting": {
+          "setup": "color temperature transition",
+          "contrast": "medium"
+        },
+        "emotion": "progression",
+        "pacing_weight": 0.3,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "crescendo",
+        "camera": {
+          "type": "close-up to wide",
+          "movement": "fast dolly out",
+          "angle": "low angle",
+          "lens": "35mm standard",
+          "orientation": "facing_camera",
+          "tracking": "pull_away"
+        },
+        "lighting": {
+          "setup": "bloom highlight with intensity build",
+          "contrast": "high"
+        },
+        "emotion": "intensity",
+        "pacing_weight": 0.35,
+        "focus_category": "character"
+      }
+    ],
+    "reveal": [
+      {
+        "shot_name": "anticipation",
+        "camera": {
+          "type": "wide shot",
+          "movement": "slow dolly in",
+          "angle": "eye level",
+          "lens": "24mm wide",
+          "orientation": "back_to_camera",
+          "tracking": "push_toward_subject"
+        },
+        "lighting": {
+          "setup": "dramatic backlight with silhouette",
+          "contrast": "high"
+        },
+        "emotion": "anticipation",
+        "pacing_weight": 0.3,
+        "focus_category": "environment"
+      },
+      {
+        "shot_name": "breakthrough",
+        "camera": {
+          "type": "medium shot",
+          "movement": "push through obstruction",
+          "angle": "low angle",
+          "lens": "35mm standard",
+          "orientation": "three_quarter",
+          "tracking": "orbit_to_face"
+        },
+        "lighting": {
+          "setup": "volumetric light breakthrough",
+          "contrast": "high"
+        },
+        "emotion": "awe",
+        "pacing_weight": 0.35,
+        "focus_category": "character"
+      },
+      {
+        "shot_name": "hero_reveal",
+        "camera": {
+          "type": "close-up to wide",
+          "movement": "crane up",
+          "angle": "low angle to eye level",
+          "lens": "50mm to 24mm",
+          "orientation": "facing_camera",
+          "tracking": "rise_above"
+        },
+        "lighting": {
+          "setup": "spotlight emergence with rim light",
+          "contrast": "high"
+        },
+        "emotion": "wonder",
+        "pacing_weight": 0.35,
+        "focus_category": "character"
+      }
+    ]
+  },
+  "genre_lighting_modifiers": {
+    "cyberpunk": {
+      "overlay": "neon rim light (magenta + cyan) with rain-wet surface reflections",
+      "atmosphere": "volumetric fog tinted by neon sources"
+    },
+    "fantasy": {
+      "overlay": "warm god rays contrasting cool moonlight fill",
+      "atmosphere": "magical particle luminescence and ancient dust"
+    },
+    "gothic": {
+      "overlay": "low-key candlelight with moonlight edge",
+      "atmosphere": "deep black shadows with selective warm accents"
+    },
+    "post_apocalyptic": {
+      "overlay": "harsh directional sunlight through dust haze",
+      "atmosphere": "flat overcast with desaturated earth tones"
+    },
+    "sci_fi": {
+      "overlay": "cool artificial ambient with holographic accent light",
+      "atmosphere": "clean volumetric with technological bloom"
+    },
+    "horror": {
+      "overlay": "low-key flickering light with deep shadow contrast and split lighting",
+      "atmosphere": "volumetric dust/fog with practical light sources (candles, flashlights, dying bulbs)"
+    },
+    "competitive": {
+      "overlay": "neon arena lighting with bloom highlights and dynamic color shifts",
+      "atmosphere": "high-saturation stage spotlights with lens flare and particle effects"
+    }
+  },
+  "hero_position_preference": {
+    "min_ratio": 0.2,
+    "max_ratio": 0.6,
+    "bonus_score": 10
+  }
+}

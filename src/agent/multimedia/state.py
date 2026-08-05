@@ -16,6 +16,62 @@ class MultimediaState(TypedDict):
     # 新增：是否启用首尾帧双控模式
     use_first_last_frame: bool
 
+    # 视觉风格（Style Registry）
+    # 由 _detect_visual_style 从用户 task 中检测，存储 _STYLE_PRESETS 的 key
+    # 供 director / end_frame_director / sanitize 等节点消费
+    visual_style: Optional[str]
+
+    # 内容类型（Content Type Registry）
+    # 由 _detect_content_type 从用户 task 中检测，存储 _CONTENT_TYPE_PRESETS 的 key
+    # 决定视频的结构形态和叙事节奏模式
+    content_type: Optional[str]
+
+    # Phase 1: Visual Context Retrieval Layer
+    # 由 visual_context_builder 节点生成，供 director 节点消费
+    visual_context: Optional[Dict[str, Any]]
+
+    # Phase 2: Shot Strategy Layer
+    # 由 shot_strategy_builder 节点生成，供 director / end_frame_director 消费
+    shot_plan: Optional[Dict[str, Any]]
+
+    # Phase 3: Sequence Orchestration Layer
+    # 由 sequence_orchestrator 节点生成，提供镜头间关系和序列上下文
+    sequence_graph: Optional[Dict[str, Any]]
+
+    # Phase 4: Self-Refining Cinematic Director System
+    # 由 cinematic_critic 节点生成，包含质量评估、问题检测和优化建议
+    critic_eval: Optional[Dict[str, Any]]
+    quality_gates: Optional[Dict[str, Any]]
+    rewrite_count: int
+
+    # Phase 5: Multi-Agent Film Studio System
+    # 由 film_studio 节点生成，包含多 Agent 协作优化的结果
+    studio_output: Optional[Dict[str, Any]]
+
+    # Phase RAG: Knowledge Retrieval Layer
+    # 由 visual_context_builder 节点中的 RAG 检索生成，供 director 消费
+    rag_context: Optional[Dict[str, Any]]
+
+    # 全局叙事弧（Narrative Arc）
+    # 由 showrunner 完成后自动从 scenes 推导生成，供 director 消费
+    # 包含每个场景的叙事功能、情绪轨迹、因果链
+    narrative_arc: Optional[Dict[str, Any]]
+
+    # 跨场景视觉锚点（Temporal State Model）
+    # 由 advance_scene 节点从已完成场景提取，供下一场景的 visual_context_builder 消费
+    # 实现场景间的视觉连续性（色调渐变、光照衔接、运镜惯性、能量过渡）
+    scene_anchors: Optional[Dict[str, Any]]
+
+    # 角色标准肖像（Character Reference Portrait）
+    # 由 showrunner_review 通过后自动生成，作为所有关键帧的辅助参考图
+    # 轻量版 Character ID 系统：正面全身标准光照，低 ref_strength 叠加使用
+    character_portrait_url: Optional[str]
+
+    # 一致性参考图（Reference Sheets）
+    # 由 reference_gen_node 生成，包含角色转面图、道具设定图、场景环境参考图
+    # 结构: {"characters": {"name": url}, "props": {"name": url}, "environments": {"name": url}}
+    reference_sheets: Optional[Dict[str, Any]]
+
     # 一致性跟踪
     reference_images: List[str]
     reference_embeddings: List[List[float]]

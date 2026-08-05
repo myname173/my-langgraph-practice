@@ -131,6 +131,8 @@ def init_session() -> None:
         "fork_global_setting": "",
         "parent_thread_id": "",
         "fork_from_checkpoint_id": "",
+        "pending_fork_prep": None,
+        "pending_tab_switch": None,
     }
 
     for key, value in defaults.items():
@@ -228,6 +230,15 @@ def collect_task_metadata() -> Dict[str, Any]:
         "shot_count": int(shot_count) if shot_count is not None else None,
         "parent_thread_id": parent_thread_id,
         "fork_from_checkpoint_id": fork_from_checkpoint_id,
+        "form_fields": {
+            "style": st.session_state.task_style or "",
+            "mood": st.session_state.task_mood or "",
+            "protagonist": st.session_state.task_protagonist or "",
+            "scene": st.session_state.task_scene or "",
+            "must_have": st.session_state.task_must_have or "",
+            "avoid": st.session_state.task_avoid or "",
+            "notes": st.session_state.task_notes or "",
+        },
     }
 
 def derive_task_text_if_needed() -> str:
@@ -249,6 +260,7 @@ def derive_task_text_if_needed() -> str:
 
 def row_to_session_defaults(row: Dict[str, Any], *, thread_id: Optional[str] = None) -> Dict[str, Any]:
     tags_text = _tags_to_text(row.get("tags",[]))
+    form_fields = row.get("form_fields") or {}
     return {
         "thread_id": thread_id or row["thread_id"],
         "thread_id_input": thread_id or row["thread_id"],
@@ -262,6 +274,13 @@ def row_to_session_defaults(row: Dict[str, Any], *, thread_id: Optional[str] = N
         "task_shot_count": row.get("shot_count", 4) or 4,
         "parent_thread_id": row.get("parent_thread_id"),
         "fork_from_checkpoint_id": row.get("fork_from_checkpoint_id"),
+        "task_style": form_fields.get("style", ""),
+        "task_mood": form_fields.get("mood", ""),
+        "task_protagonist": form_fields.get("protagonist", ""),
+        "task_scene": form_fields.get("scene", ""),
+        "task_must_have": form_fields.get("must_have", ""),
+        "task_avoid": form_fields.get("avoid", ""),
+        "task_notes": form_fields.get("notes", ""),
     }
 
 def load_checkpoint_snapshot(thread_id: str, checkpoint_id: str):
@@ -275,23 +294,33 @@ def clear_checkpoint_fork_editor() -> None:
     st.session_state.fork_editor_ready = False
 
 def prepare_checkpoint_fork_editor(thread_id: str, checkpoint_id: str) -> None:
+    """延迟版：将分叉准备数据暂存到 pending_fork_prep，下次 rerun 时在 tab 渲染前应用"""
     snapshot = load_checkpoint_snapshot(thread_id, checkpoint_id)
     values = getattr(snapshot, "values", None) or {}
     task_row = load_task_state(thread_id) or {}
 
-    st.session_state.fork_source_thread_id = thread_id
-    st.session_state.fork_source_checkpoint_id = checkpoint_id
-    st.session_state.fork_target_thread_id = str(uuid.uuid4())
-    st.session_state.fork_editor_ready = True
+    st.session_state.pending_fork_prep = {
+        "fork_source_thread_id": thread_id,
+        "fork_source_checkpoint_id": checkpoint_id,
+        "fork_target_thread_id": str(uuid.uuid4()),
+        "fork_editor_ready": True,
+        "fork_title": f"{task_row.get('title') or task_row.get('project_type') or '分叉任务'}（分叉）",
+        "fork_tags_text": _tags_to_text(task_row.get("tags", [])),
+        "fork_task_text": values.get("task") or task_row.get("task_text") or DEFAULT_TASK,
+        "fork_global_setting": values.get("global_setting") or task_row.get("summary", {}).get("global_setting", ""),
+        "task_mode": "fork",
+        "parent_thread_id": thread_id,
+        "fork_from_checkpoint_id": checkpoint_id,
+    }
 
-    st.session_state.fork_title = f"{task_row.get('title') or task_row.get('project_type') or '分叉任务'}（分叉）"
-    st.session_state.fork_tags_text = _tags_to_text(task_row.get("tags",[]))
-    st.session_state.fork_task_text = values.get("task") or task_row.get("task_text") or DEFAULT_TASK
-    st.session_state.fork_global_setting = values.get("global_setting") or task_row.get("summary", {}).get("global_setting", "")
-
-    st.session_state.task_mode = "fork"
-    st.session_state.parent_thread_id = thread_id
-    st.session_state.fork_from_checkpoint_id = checkpoint_id
+def apply_pending_fork_prep() -> None:
+    """在 main() 最开头调用，tab 渲染之前应用分叉准备数据"""
+    prep = st.session_state.get("pending_fork_prep")
+    if not prep:
+        return
+    for key, value in prep.items():
+        st.session_state[key] = value
+    st.session_state.pending_fork_prep = None
 
 def perform_checkpoint_fork() -> None:
     source_thread_id = (st.session_state.fork_source_thread_id or "").strip()
@@ -328,6 +357,7 @@ def perform_checkpoint_fork() -> None:
         final_movie_path=None,
         abort_reason=None,
         last_error=None,
+        form_fields=meta.get("form_fields"),
     )
 
     updates = {}
@@ -495,6 +525,16 @@ def summarize_current_state(values: Dict[str, Any]) -> Dict[str, Any]:
         "final_movie_path": values.get("final_movie_path"),
         "aborted": bool(values.get("aborted")),
         "abort_reason": values.get("abort_reason") or values.get("error_log"),
+        # Phase 1-5 增量设计字段
+        "visual_context": values.get("visual_context"),
+        "shot_plan": values.get("shot_plan"),
+        "sequence_graph": values.get("sequence_graph"),
+        "critic_eval": values.get("critic_eval"),
+        "quality_gates": values.get("quality_gates"),
+        "rewrite_count": values.get("rewrite_count", 0),
+        "studio_output": values.get("studio_output"),
+        # Phase RAG: 知识检索
+        "rag_context": values.get("rag_context"),
     }
 
 def normalize_status(values: Dict[str, Any], pending_payload: Optional[Dict[str, Any]]) -> str:
@@ -552,6 +592,7 @@ def persist_task_state_from_thread(thread_id: str, pending_payload: Optional[Dic
         final_movie_path=values.get("final_movie_path"),
         abort_reason=values.get("abort_reason") or values.get("error_log"),
         last_error=values.get("error_log"),
+        form_fields=meta.get("form_fields"),
     )
 
 def restore_thread_state_only(thread_id: str) -> None:
@@ -642,6 +683,7 @@ def start_new_run() -> None:
         final_movie_path=None,
         abort_reason=None,
         last_error=None,
+        form_fields=meta.get("form_fields"),
     )
 
     with st.spinner("启动图文视频流水线..."):
@@ -715,7 +757,7 @@ def render_quick_start_card() -> None:
         st.text_input("任务标题", key="task_title", placeholder="例如：未来都市短片预告")
         st.text_input("标签（用逗号分隔）", key="task_tags_text", placeholder="科幻, 霓虹, 女性主角")
         st.slider("时长（秒）", 10, 60, key="task_duration")
-        st.slider("镜头数量", 3, 6, key="task_shot_count")
+        st.slider("镜头数量", 3, 8, key="task_shot_count")
     with c2:
         st.text_input("项目类型", key="task_project_type")
         st.text_area("画面风格", key="task_style", height=90)
@@ -810,6 +852,7 @@ def render_task_card(item: Dict[str, Any]) -> None:
                     load_task_state(item["thread_id"]) or {"thread_id": item["thread_id"], "task_text": DEFAULT_TASK},
                     thread_id=item["thread_id"],
                 )
+                st.session_state.pending_tab_switch = "timeline"
                 st.rerun()
 
         with st.expander("摘要", expanded=False):
@@ -930,6 +973,97 @@ def render_interrupt_panel(payload: Dict[str, Any]) -> None:
             resume_with_decision({"action": action, "image_prompt": edited_prompt, "reason": reason})
             st.rerun()
 
+    # 新增：Prompt 预览审核界面（生图前）
+    elif stage == "prompt_preview":
+        st.subheader(f"🔍 镜头 {payload.get('scene_index', '?')} — Prompt 预览（生图前审核）")
+        st.caption("Director 已生成以下 image_prompt，请确认后再调用图生模型（避免浪费额度）。")
+
+        st.markdown("**当前场景剧本：**")
+        st.text_area("script", value=payload.get("script", ""), height=100, disabled=True)
+
+        st.markdown("**Director 生成的 image_prompt（英文）：**")
+        current_prompt = payload.get("image_prompt", "")
+        # 检查是否有中文字符（红色警告）
+        import re as _re
+        has_chinese = bool(_re.search(r'[\u4e00-\u9fff]', current_prompt))
+        if has_chinese:
+            st.error("⚠️ 检测到 prompt 中包含中文字符！建议手动编辑为纯英文后再生成。")
+        st.text_area("image_prompt", value=current_prompt, height=250, disabled=True)
+
+        # 单词计数
+        word_count = len(current_prompt.split())
+        if word_count < 80:
+            st.warning(f"⚠️ Prompt 仅 {word_count} 词（建议 ≥80 词），细节可能不足。")
+        else:
+            st.success(f"✅ {word_count} 词，满足详细度要求。")
+
+        with st.form("prompt_preview_form"):
+            action = st.radio(
+                "操作",
+                ["approve", "edit_prompt", "rewrite"],
+                horizontal=True,
+                index=0,
+                format_func=lambda x: {"approve": "✅ 生成图片", "edit_prompt": "✏️ 编辑后生成", "rewrite": "🔄 重写 Prompt"}[x],
+            )
+            edited_prompt = st.text_area(
+                "编辑 image_prompt（仅「编辑后生成」时生效）",
+                value=current_prompt,
+                height=250,
+            )
+            reason = st.text_input("备注 / 重写指示（可选）", value="")
+            submitted = st.form_submit_button("提交并继续")
+
+        if submitted:
+            resume_with_decision({"action": action, "image_prompt": edited_prompt, "reason": reason})
+            st.rerun()
+
+    # 尾帧 Prompt 预览审核界面（生图前）——与 prompt_preview 镜像
+    elif stage == "end_frame_prompt_preview":
+        st.subheader(f"🔍 镜头 {payload.get('scene_index', '?')} — 尾帧 Prompt 预览（生图前审核）")
+        st.caption("End-Frame Director 已生成以下 last_image_prompt，确认后再调用图生模型（避免浪费额度）。")
+
+        # 首帧参考图（视觉锚点）
+        ref_url = payload.get("reference_image_url", "")
+        if ref_url:
+            st.image(ref_url, caption="参考图：当前镜头的【首帧】", use_container_width=True)
+
+        st.markdown("**当前场景剧本：**")
+        st.text_area("end_frame_script", value=payload.get("script", ""), height=100, disabled=True)
+
+        st.markdown("**End-Frame Director 生成的 last_image_prompt（英文）：**")
+        current_prompt = payload.get("image_prompt", "")
+        import re as _re
+        has_chinese = bool(_re.search(r'[\u4e00-\u9fff]', current_prompt))
+        if has_chinese:
+            st.error("⚠️ 检测到 prompt 中包含中文字符！建议手动编辑为纯英文后再生成。")
+        st.text_area("end_frame_image_prompt", value=current_prompt, height=250, disabled=True)
+
+        word_count = len(current_prompt.split())
+        if word_count < 80:
+            st.warning(f"⚠️ Prompt 仅 {word_count} 词（建议 ≥80 词），细节可能不足。")
+        else:
+            st.success(f"✅ {word_count} 词，满足详细度要求。")
+
+        with st.form("end_frame_prompt_preview_form"):
+            action = st.radio(
+                "操作",
+                ["approve", "edit_prompt", "rewrite"],
+                horizontal=True,
+                index=0,
+                format_func=lambda x: {"approve": "✅ 生成尾帧", "edit_prompt": "✏️ 编辑后生成", "rewrite": "🔄 重写 Prompt"}[x],
+            )
+            edited_prompt = st.text_area(
+                "编辑 last_image_prompt（仅「编辑后生成」时生效）",
+                value=current_prompt,
+                height=250,
+            )
+            reason = st.text_input("备注 / 重写指示（可选）", value="")
+            submitted = st.form_submit_button("提交并继续")
+
+        if submitted:
+            resume_with_decision({"action": action, "image_prompt": edited_prompt, "reason": reason})
+            st.rerun()
+
     # 新增：尾帧审片界面
     elif stage == "end_frame_review":
         st.subheader("尾帧审片")
@@ -967,12 +1101,14 @@ def render_interrupt_panel(payload: Dict[str, Any]) -> None:
         with c2:
             sim = payload.get("embedding_similarity")
             st.metric("Embedding similarity", "N/A" if sim is None else f"{sim:.4f}")
-            st.text_area("当前 video_prompt", value=payload.get("video_prompt", ""), height=200, disabled=True)
-            st.text_area("自动反馈 / 失败原因", value=payload.get("auto_feedback", ""), height=160, disabled=True)
+            st.text_area("当前镜头剧本", value=payload.get("script", ""), height=120, disabled=True)
+            st.text_area("当前 video_prompt（运镜指令）", value=payload.get("video_prompt", ""), height=150, disabled=True)
+            st.caption("💡 video_prompt 是给视频模型的运镜/动态指令（非场景描述），场景内容已由关键帧图片承载。如需修改动态效果，选择 edit_prompt 编辑下方内容。")
+            st.text_area("自动反馈 / 失败原因", value=payload.get("auto_feedback", ""), height=120, disabled=True)
 
         with st.form("video_review_form"):
             action = st.radio("操作",["approve", "rewrite", "edit_prompt"], horizontal=True, index=0)
-            edited_prompt = st.text_area("修改后的 video_prompt", value=payload.get("video_prompt", ""), height=200)
+            edited_prompt = st.text_area("修改后的 video_prompt", value=payload.get("video_prompt", ""), height=150)
             reason = st.text_input("备注（可选）", value="")
             submitted = st.form_submit_button("提交并继续")
 
@@ -1091,6 +1227,7 @@ def render_fork_tree_node(node: Dict[str, Any], depth: int = 0, current_thread_i
             if latest_checkpoint_id:
                 if st.button("从此分叉", key=f"tree_fork_{thread_id}"):
                     prepare_checkpoint_fork_editor(thread_id, latest_checkpoint_id)
+                    st.session_state.pending_tab_switch = "fork"
                     st.rerun()
             else:
                 st.caption("无 checkpoint")
@@ -1098,6 +1235,7 @@ def render_fork_tree_node(node: Dict[str, Any], depth: int = 0, current_thread_i
             if st.button("时间轴", key=f"tree_timeline_{thread_id}"):
                 st.session_state.thread_id = thread_id
                 st.session_state.thread_id_input = thread_id
+                st.session_state.pending_tab_switch = "timeline"
                 st.rerun()
 
     for child in children:
@@ -1142,15 +1280,24 @@ def render_checkpoint_timeline(thread_id: str) -> None:
             with col3:
                 if st.button("🔀 从此分叉", key=f"timeline_fork_{checkpoint_id}", use_container_width=True, type="primary"):
                     prepare_checkpoint_fork_editor(thread_id, str(checkpoint_id))
+                    st.session_state.pending_tab_switch = "fork"
                     st.rerun()
 
             summary = summarize_current_state(values)
             with st.expander("📊 当前状态摘要", expanded=False):
+                ce = summary.get("critic_eval") or {}
+                so = summary.get("studio_output") or {}
+                rag_ctx = summary.get("rag_context") or {}
                 st.json({
                     "current_scene_index": summary.get("current_scene_index"),
                     "scene_count": summary.get("scene_count"),
                     "final_movie_path": bool(summary.get("final_movie_path")),
                     "aborted": summary.get("aborted", False),
+                    "rewrite_count": summary.get("rewrite_count", 0),
+                    "critic_score": ce.get("overall_score") if ce else None,
+                    "critic_pass": ce.get("pass_gates") if ce else None,
+                    "studio_consensus": so.get("studio_consensus") if so else None,
+                    "rag_refs_count": rag_ctx.get("total_retrieved", 0),
                 })
                 if summary.get("current_scene_script"):
                     st.caption("当前镜头脚本预览")
@@ -1225,6 +1372,7 @@ def render_task_table() -> None:
         if st.button("打开时间轴", use_container_width=True):
             st.session_state.thread_id = selected_thread_id
             st.session_state.thread_id_input = selected_thread_id
+            st.session_state.pending_tab_switch = "timeline"
             st.rerun()
 
 def render_task_registry() -> None:
@@ -1234,6 +1382,243 @@ def render_task_registry() -> None:
         render_task_table()
     else:
         render_fork_tree_board()
+
+def render_incremental_design() -> None:
+    """Phase 1-5 增量设计可视化面板"""
+    if not st.session_state.thread_id:
+        st.info("当前没有 thread_id。")
+        return
+    try:
+        snapshot = get_thread_state(st.session_state.thread_id)
+        values = getattr(snapshot, "values", None) or {}
+    except Exception as e:
+        st.error(f"读取当前状态失败：{e}")
+        return
+
+    idx = values.get("current_scene_index", 0)
+    total_scenes = len(values.get("scenes", []) or [])
+    st.markdown(f"**当前镜头**: {idx + 1} / {total_scenes}")
+
+    # ── Phase 1: Visual Context ──
+    with st.expander("Phase 1: 视觉上下文 (Visual Context)", expanded=False):
+        vc = values.get("visual_context")
+        if vc:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("场景意图", vc.get("intent", "N/A"))
+            col2.metric("节奏阶段", vc.get("pacing_phase", "N/A"))
+            col3.metric("类型检测", ", ".join(vc.get("genres", [])) if vc.get("genres") else "N/A")
+            with st.expander("摄影规则", expanded=False):
+                for rule in vc.get("camera_rules", []):
+                    st.write(f"• {rule}")
+            with st.expander("光影规则", expanded=False):
+                for rule in vc.get("lighting_rules", []):
+                    st.write(f"• {rule}")
+            if vc.get("formatted_prompt_block"):
+                with st.expander("格式化 Prompt Block", expanded=False):
+                    st.code(vc["formatted_prompt_block"], language="text")
+        else:
+            st.caption("visual_context 尚未生成")
+
+    # ── Phase 2: Shot Plan ──
+    with st.expander("Phase 2: 镜头规划 (Shot Plan)", expanded=False):
+        sp = values.get("shot_plan")
+        if sp:
+            shots = sp.get("shots", [])
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("意图分类", sp.get("intent", "N/A"))
+            col2.metric("镜头数", len(shots))
+            hero_idx = sp.get("hero_shot_index", 0)
+            col3.metric("Hero Shot", f"#{hero_idx + 1} {shots[hero_idx]['shot_name']}" if shots else "N/A")
+            end_idx = sp.get("end_shot_index", 0)
+            col4.metric("End Shot", f"#{end_idx + 1} {shots[end_idx]['shot_name']}" if shots else "N/A")
+            if shots:
+                st.markdown("**镜头序列:**")
+                for i, shot in enumerate(shots):
+                    cam = shot.get("camera", {})
+                    marker = ""
+                    if i == hero_idx:
+                        marker = " ⭐ HERO"
+                    elif i == end_idx:
+                        marker = " 🏁 END"
+                    st.write(
+                        f"**#{i+1} {shot.get('shot_name', '?')}{marker}** — "
+                        f"{cam.get('type', '?')} | {cam.get('movement', '?')} | "
+                        f"{cam.get('angle', '?')} | {cam.get('lens', '?')} | "
+                        f"emotion: {shot.get('emotion', '?')} | "
+                        f"weight: {shot.get('pacing_weight', '?')}"
+                    )
+            if sp.get("formatted_plan"):
+                with st.expander("完整 Shot Plan 文本", expanded=False):
+                    st.code(sp["formatted_plan"], language="text")
+        else:
+            st.caption("shot_plan 尚未生成")
+
+    # ── Phase 3: Sequence Graph ──
+    with st.expander("Phase 3: 序列编排 (Sequence Graph)", expanded=False):
+        sg = values.get("sequence_graph")
+        if sg:
+            conns = sg.get("connections", [])
+            arc = sg.get("emotional_arc", {})
+            col1, col2, col3 = st.columns(3)
+            col1.metric("连接数", len(conns))
+            col2.metric("曲线形状", arc.get("shape", "N/A"))
+            col3.metric("总体方向", arc.get("overall_direction", "N/A"))
+            if arc.get("energy_curve"):
+                st.markdown("**能量曲线:**")
+                st.write(" → ".join(f"{e:.2f}" for e in arc["energy_curve"]))
+            if arc.get("peak_emotion"):
+                st.write(f"峰值: shot #{arc.get('peak_index', 0) + 1} ({arc['peak_emotion']})")
+            if conns:
+                st.markdown("**转场关系:**")
+                for c in conns:
+                    emo = c.get("emotional_delta", {})
+                    st.write(
+                        f"**{c.get('from_name', '?')}** →[{c.get('transition', '?')}]→ "
+                        f"**{c.get('to_name', '?')}** | "
+                        f"motion: {c.get('motion_continuity', '?')} | "
+                        f"emotion: {emo.get('description', '?')}"
+                    )
+            if sg.get("formatted_graph"):
+                with st.expander("完整 Sequence Graph 文本", expanded=False):
+                    st.code(sg["formatted_graph"], language="text")
+            if sg.get("director_context"):
+                with st.expander("Director Context 文本", expanded=False):
+                    st.code(sg["director_context"], language="text")
+        else:
+            st.caption("sequence_graph 尚未生成")
+
+    # ── Phase 4: Cinematic Critic ──
+    with st.expander("Phase 4: 电影评审 (Cinematic Critic)", expanded=False):
+        ce = values.get("critic_eval")
+        rw = values.get("rewrite_count", 0)
+        qg = values.get("quality_gates")
+        if ce:
+            scores = ce.get("scores", {})
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("综合评分", f"{ce.get('overall_score', 0):.2f}")
+            col2.metric("视觉质量", f"{scores.get('visual_quality', 0):.2f}")
+            col3.metric("一致性", f"{scores.get('coherence', 0):.2f}")
+            col4.metric("电影流", f"{scores.get('cinematic_flow', 0):.2f}")
+            col5.metric("情绪一致", f"{scores.get('emotion_consistency', 0):.2f}")
+            pass_label = "✅ PASS" if ce.get("pass_gates") else "❌ FAIL"
+            st.markdown(f"**质量门控**: {pass_label} | **重写次数**: {rw}")
+            if qg:
+                st.json(qg)
+            if ce.get("issues"):
+                st.markdown("**问题:**")
+                for issue in ce["issues"]:
+                    st.write(f"• {issue}")
+            if ce.get("suggestions"):
+                st.markdown("**建议:**")
+                for s in ce["suggestions"]:
+                    st.write(f"• {s}")
+            if ce.get("rewrite_strategies"):
+                st.markdown("**重写策略:**")
+                st.write(", ".join(ce["rewrite_strategies"]))
+        else:
+            st.caption("critic_eval 尚未生成")
+
+    # ── Phase 5: Film Studio ──
+    with st.expander("Phase 5: 电影工作室 (Film Studio)", expanded=False):
+        so = values.get("studio_output")
+        if so:
+            col1, col2, col3 = st.columns(3)
+            col1.metric("团队共识", f"{so.get('studio_consensus', 0):.0%}")
+            col2.metric("总修改数", len(so.get("modifications", [])))
+            col3.metric("Debate 冲突", len(so.get("debate", [])))
+            # Cinematography
+            cine = so.get("cinematography", {})
+            if cine:
+                with st.expander("摄影 Agent", expanded=False):
+                    st.write(f"评分: {cine.get('score', 'N/A')}")
+                    if cine.get("modifications"):
+                        for m in cine["modifications"]:
+                            st.write(f"• {m}")
+            # Lighting
+            light = so.get("lighting", {})
+            if light:
+                with st.expander("光影 Agent", expanded=False):
+                    st.write(f"评分: {light.get('score', 'N/A')}")
+                    if light.get("modifications"):
+                        for m in light["modifications"]:
+                            st.write(f"• {m}")
+            # Editor
+            editor = so.get("editing", {})
+            if editor:
+                with st.expander("剪辑 Agent", expanded=False):
+                    st.write(f"评分: {editor.get('score', 'N/A')}")
+                    if editor.get("modifications"):
+                        for m in editor["modifications"]:
+                            st.write(f"• {m}")
+            # Debate
+            debate = so.get("debate", [])
+            if debate:
+                with st.expander("Agent Debate", expanded=False):
+                    for d in debate:
+                        st.write(f"• [{d.get('type', '?')}] {d.get('resolution', d.get('description', '?'))}")
+            # Film Brain
+            fb = so.get("film_brain")
+            if fb:
+                with st.expander("Global Film Brain", expanded=False):
+                    if isinstance(fb, str):
+                        st.code(fb, language="text")
+                    else:
+                        st.json(fb)
+            if so.get("formatted_studio_report"):
+                with st.expander("完整工作室报告", expanded=False):
+                    st.code(so["formatted_studio_report"], language="text")
+        else:
+            st.caption("studio_output 尚未生成")
+
+    # ── Phase RAG: Knowledge Retrieval ──
+    with st.expander("Phase RAG: 知识检索 (RAG Context)", expanded=False):
+        rc = values.get("rag_context")
+        if rc:
+            total = rc.get("total_retrieved", 0)
+            st.metric("检索到的参考数", total)
+            # 摄影知识
+            cine_refs = rc.get("cinematography_refs", [])
+            if cine_refs:
+                with st.expander(f"摄影知识 ({len(cine_refs)} 条)", expanded=False):
+                    for i, ref in enumerate(cine_refs, 1):
+                        dist = ref.get("distance", "?")
+                        meta = ref.get("metadata", {})
+                        cat = meta.get("category", "")
+                        src = meta.get("source_file", "")
+                        st.markdown(f"**#{i}** [{cat}] _{src}_ (距离: {dist:.3f})")
+                        st.code(ref["document"][:500], language="text")
+                        st.divider()
+            # Prompt 样本
+            prompt_refs = rc.get("prompt_refs", [])
+            if prompt_refs:
+                with st.expander(f"高质量 Prompt 样本 ({len(prompt_refs)} 条)", expanded=False):
+                    for i, ref in enumerate(prompt_refs, 1):
+                        dist = ref.get("distance", "?")
+                        meta = ref.get("metadata", {})
+                        style = meta.get("style", "")
+                        score = meta.get("quality_score", 0)
+                        st.markdown(f"**#{i}** [style={style}, quality={score:.1f}] (距离: {dist:.3f})")
+                        st.code(ref["document"][:500], language="text")
+                        st.divider()
+            # 影视参考
+            film_refs = rc.get("film_refs", [])
+            if film_refs:
+                with st.expander(f"影视参考 ({len(film_refs)} 条)", expanded=False):
+                    for i, ref in enumerate(film_refs, 1):
+                        dist = ref.get("distance", "?")
+                        meta = ref.get("metadata", {})
+                        title = meta.get("film_title", "")
+                        st.markdown(f"**#{i}** _{title}_ (距离: {dist:.3f})")
+                        st.code(ref["document"][:500], language="text")
+                        st.divider()
+            # 完整格式化文本
+            rag_block = rc.get("formatted_rag_block", "")
+            if rag_block:
+                with st.expander("完整 RAG Prompt Block", expanded=False):
+                    st.code(rag_block, language="text")
+        else:
+            st.caption("rag_context 尚未生成（知识库可能为空或未初始化）")
+
 
 def render_current_state() -> None:
     if not st.session_state.thread_id:
@@ -1281,17 +1666,18 @@ def main() -> None:
     init_session()
     
     apply_pre_widget_bootstrap()
-    sync_shared_to_pro_widgets()   
+    sync_shared_to_pro_widgets()
     auto_bootstrap_latest_task()
+    apply_pending_fork_prep()  # 在 tab 渲染前应用分叉准备数据
     st.title("多模态视频生成工作台")
     st.caption("这版加入了更完整的任务元数据和更灵活的新手编辑。")
 
     with st.sidebar:
         st.subheader("任务设置")
         # 新增：首尾帧双控模式开关
-        st.session_state.task_use_first_last_frame = st.toggle(
-            "启用首尾帧双控生成 (更精准的动作控制，但耗时增加)", 
-            value=st.session_state.get("task_use_first_last_frame", False)
+        st.toggle(
+            "启用首尾帧双控生成 (更精准的动作控制，但耗时增加)",
+            key="task_use_first_last_frame",
         )
         
         st.divider()
@@ -1336,6 +1722,9 @@ def main() -> None:
                 snapshot = get_thread_state(st.session_state.thread_id)
                 values = getattr(snapshot, "values", None) or {}
                 with st.expander("当前线程摘要", expanded=False):
+                    ce = values.get("critic_eval") or {}
+                    so = values.get("studio_output") or {}
+                    rag_ctx = values.get("rag_context") or {}
                     st.json({
                         "current_scene_index": values.get("current_scene_index"),
                         "aborted": values.get("aborted"),
@@ -1343,11 +1732,41 @@ def main() -> None:
                         "final_movie_path": values.get("final_movie_path"),
                         "scene_count": len(values.get("scenes", []) or[]),
                         "reference_images_count": len(values.get("reference_images", []) or[]),
+                        "rewrite_count": values.get("rewrite_count", 0),
+                        "critic_score": ce.get("overall_score") if ce else None,
+                        "critic_pass": ce.get("pass_gates") if ce else None,
+                        "studio_consensus": so.get("studio_consensus") if so else None,
+                        "rag_refs_count": rag_ctx.get("total_retrieved", 0),
                     })
             except Exception as e:
                 st.caption(f"无法读取当前 checkpoint：{e}")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["新手模式", "专业模式", "恢复中心", "分叉恢复", "时间轴", "当前状态"])
+    # ── Tab 跳转横幅：在 tabs 之前直接渲染目标页面 ──
+    tab_switch = st.session_state.get("pending_tab_switch")
+    if tab_switch == "timeline" and st.session_state.thread_id:
+        with st.container(border=True):
+            col_a, col_b = st.columns([5, 1])
+            with col_a:
+                st.info("📍 已从恢复中心跳转到时间轴视图。点击下方按钮返回标签页。")
+            with col_b:
+                if st.button("返回标签页", use_container_width=True):
+                    st.session_state.pending_tab_switch = None
+                    st.rerun()
+        render_checkpoint_timeline(st.session_state.thread_id)
+        st.divider()
+    elif tab_switch == "fork" and st.session_state.get("fork_editor_ready"):
+        with st.container(border=True):
+            col_a, col_b = st.columns([5, 1])
+            with col_a:
+                st.info("📍 已从时间轴跳转到分叉编辑器。点击下方按钮返回标签页。")
+            with col_b:
+                if st.button("返回标签页", use_container_width=True, key="dismiss_fork_switch"):
+                    st.session_state.pending_tab_switch = None
+                    st.rerun()
+        render_checkpoint_fork_editor()
+        st.divider()
+
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["新手模式", "专业模式", "恢复中心", "分叉恢复", "时间轴", "增量设计", "当前状态"])
 
     with tab1:
         render_quick_start_card()
@@ -1356,13 +1775,21 @@ def main() -> None:
     with tab3:
         render_recovery_center()
     with tab4:
-        render_checkpoint_fork_editor()
-    with tab5:
-        if st.session_state.thread_id:
-            render_checkpoint_timeline(st.session_state.thread_id)
+        if tab_switch != "fork":
+            render_checkpoint_fork_editor()
         else:
-            st.info("没有可查看的 thread_id。")
+            st.info('分叉编辑器已在上方显示。点击「返回标签页」回到正常视图。')
+    with tab5:
+        if tab_switch != "timeline":
+            if st.session_state.thread_id:
+                render_checkpoint_timeline(st.session_state.thread_id)
+            else:
+                st.info("没有可查看的 thread_id。")
+        else:
+            st.info('时间轴已在上方显示。点击「返回标签页」回到正常视图。')
     with tab6:
+        render_incremental_design()
+    with tab7:
         render_current_state()
 
     apply_pending_actions()

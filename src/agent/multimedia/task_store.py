@@ -84,7 +84,8 @@ def init_task_store() -> None:
                 abort_reason TEXT,
                 last_error TEXT,
                 summary_json TEXT NOT NULL DEFAULT '{}',
-                pending_payload_json TEXT
+                pending_payload_json TEXT,
+                form_fields_json TEXT
             )
             """
         )
@@ -112,6 +113,7 @@ def init_task_store() -> None:
             ("task_text", "TEXT NOT NULL DEFAULT ''"),
             ("created_at", "TEXT NOT NULL DEFAULT ''"),
             ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ("form_fields_json", "TEXT"),
         ]
 
         for column_name, ddl in migrations:
@@ -141,6 +143,7 @@ def save_task_state(
     final_movie_path: Optional[str] = None,
     abort_reason: Optional[str] = None,
     last_error: Optional[str] = None,
+    form_fields: Optional[Dict[str, str]] = None,
 ) -> None:
     """
     保存任务注册表状态。
@@ -154,6 +157,7 @@ def save_task_state(
     payload_json = _dumps(pending_payload) if pending_payload is not None else None
     summary_json = _dumps(summary)
     tags_json = _dumps(_normalize_tags(tags))
+    form_fields_json = _dumps(form_fields) if form_fields is not None else None
 
     with _connect() as conn:
         row = conn.execute(
@@ -186,9 +190,10 @@ def save_task_state(
                 abort_reason,
                 last_error,
                 summary_json,
-                pending_payload_json
+                pending_payload_json,
+                form_fields_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(thread_id) DO UPDATE SET
                 task_text = excluded.task_text,
                 title = excluded.title,
@@ -209,7 +214,8 @@ def save_task_state(
                 abort_reason = excluded.abort_reason,
                 last_error = excluded.last_error,
                 summary_json = excluded.summary_json,
-                pending_payload_json = excluded.pending_payload_json
+                pending_payload_json = excluded.pending_payload_json,
+                form_fields_json = excluded.form_fields_json
             """,
             (
                 thread_id,
@@ -234,6 +240,7 @@ def save_task_state(
                 last_error,
                 summary_json,
                 payload_json,
+                form_fields_json,
             ),
         )
         conn.commit()
@@ -273,6 +280,7 @@ def load_task_state(thread_id: str) -> Optional[Dict[str, Any]]:
         "last_error": row["last_error"],
         "summary": _loads(row["summary_json"]) or {},
         "pending_payload": _loads(row["pending_payload_json"]),
+        "form_fields": _loads(row["form_fields_json"]) or {},
     }
 
 
@@ -315,6 +323,7 @@ def list_task_states(limit: int = 50) -> List[Dict[str, Any]]:
                 "last_error": row["last_error"],
                 "summary": _loads(row["summary_json"]) or {},
                 "pending_payload": _loads(row["pending_payload_json"]),
+                "form_fields": _loads(row["form_fields_json"]) or {},
             }
         )
     return tasks
@@ -364,6 +373,7 @@ def get_latest_active_task_state() -> Optional[Dict[str, Any]]:
         "last_error": row["last_error"],
         "summary": _loads(row["summary_json"]) or {},
         "pending_payload": _loads(row["pending_payload_json"]),
+        "form_fields": _loads(row["form_fields_json"]) or {},
     }
 
 

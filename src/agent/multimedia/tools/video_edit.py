@@ -3,6 +3,7 @@ import os
 import time
 import requests
 from dotenv import load_dotenv
+from .video_gen import _retry_request, _SUBMIT_TIMEOUT, _POLL_TIMEOUT
 
 load_dotenv()
 
@@ -11,19 +12,20 @@ def edit_video_style(video_url: str, prompt: str) -> str:
     api_key = os.getenv("DASHSCOPE_API_KEY", os.getenv("OPENAI_API_KEY"))
     session = requests.Session()
     session.trust_env = False
-    
+
     # ✅ 正确 endpoint（视频编辑模型专用）
     submit_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
-    
+
     headers = {
         "X-DashScope-Async": "enable",
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    
+
     # ✅ 关键修复：使用官方要求的 media 数组结构
+    model_name = os.getenv("DASHSCOPE_VIDEO_EDIT_MODEL", "wan2.7-videoedit")
     payload = {
-        "model": "wan2.7-videoedit",
+        "model": model_name,
         "input": {
             "prompt": prompt,                    # 后期精修提示词
             "media": [                           # ← 必填！新版必须使用 media
@@ -39,21 +41,44 @@ def edit_video_style(video_url: str, prompt: str) -> str:
             "watermark": False                   # 不加水印
         }
     }
-    
-    response = session.post(submit_url, headers=headers, json=payload)
+
+    print(f"    [后期精修] 使用模型: {model_name}")
+
+    def _do_post():
+        return session.post(submit_url, headers=headers, json=payload, timeout=_SUBMIT_TIMEOUT)
+
+    response = _retry_request(_do_post, label="后期精修提交")
     if response.status_code != 200:
-        raise Exception(f"后期精修提交异常: {response.text}")
-    
+        err_text = response.text
+        if "quota" in err_text.lower() or "not found" in err_text.lower() or "InvalidModel" in err_text:
+            raise Exception(f"后期精修模型 {model_name} 不可用或额度不足: {err_text}")
+        raise Exception(f"后期精修提交异常: {err_text}")
+
     task_id = response.json().get("output", {}).get("task_id")
     print(f"[后期进度] 正在进行电影级调色与特效增强，Task ID: {task_id}")
-    
+
     poll_url = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+    poll_fail_count = 0
+
     while True:
-        poll_resp = session.get(poll_url, headers=headers)
-        poll_data = poll_resp.json()
+        try:
+            def _do_get():
+                return session.get(poll_url, headers=headers, timeout=_POLL_TIMEOUT)
+
+            poll_resp = _retry_request(_do_get, max_retries=2, backoff=[2, 5], label="后期轮询")
+            poll_data = poll_resp.json()
+            poll_fail_count = 0
+        except Exception as poll_err:
+            poll_fail_count += 1
+            if poll_fail_count >= 5:
+                raise Exception(f"后期精修轮询连续 {poll_fail_count} 次失败: {poll_err}")
+            print(f"    ⚠️ [后期轮询] 网络异常 ({type(poll_err).__name__})，5s 后继续 ({poll_fail_count}/5)...")
+            time.sleep(5)
+            continue
+
         output = poll_data.get("output", {})
         task_status = output.get("task_status", "")
-        
+
         if task_status == "SUCCEEDED":
             # 更鲁棒的 URL 解析（兼容新旧返回结构）
             final_video_url = (
@@ -65,9 +90,9 @@ def edit_video_style(video_url: str, prompt: str) -> str:
                 print(f"    ✅ 后期精修完成！URL: {final_video_url}")
                 return final_video_url
             raise Exception(f"后期精修成功但未能解析视频 URL: {poll_data}")
-        
+
         elif task_status == "FAILED":
             raise Exception(f"后期精修失败: {poll_data}")
-        
+
         print("    [后期进度] 视频逐帧渲染精修中，请耐心等待 (约5秒/次)...")
         time.sleep(5)

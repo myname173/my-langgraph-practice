@@ -3,30 +3,50 @@ import os
 from typing import List
 import numpy as np
 from dotenv import load_dotenv
-import httpx
-from openai import OpenAI
+import requests
 
 load_dotenv()
 
-http_client = httpx.Client(trust_env=False)
+_session = requests.Session()
+_session.trust_env = False
 
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY", os.getenv("DASHSCOPE_API_KEY")),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-    http_client=http_client
-)
+# DashScope 原生 API 端点（multimodal-embedding-v1 不支持 OpenAI 兼容模式）
+_EMBEDDING_URL = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+_DEFAULT_MODEL = os.getenv("DASHSCOPE_EMBEDDING_MODEL", "multimodal-embedding-v1")
+_DEFAULT_DIMENSION = 1024
 
 
-def get_image_embedding(image_url: str) -> List[float]:
+def get_image_embedding(image_url: str, model: str = _DEFAULT_MODEL, dimension: int = _DEFAULT_DIMENSION) -> List[float]:
     """
-    获取图片 embedding。
-    如果你的平台对多模态 embedding 的入参格式有差异，只需要改这里。
+    获取图片 embedding（通过 DashScope 原生 API）。
+    multimodal-embedding-v1 不支持 OpenAI 兼容模式，必须走原生端点。
     """
-    response = client.embeddings.create(
-        model=os.getenv("DASHSCOPE_EMBEDDING_MODEL", "multimodal-embedding-v1"),
-        input=[{"image_url": image_url}]
-    )
-    return response.data[0].embedding
+    api_key = os.getenv("DASHSCOPE_API_KEY", os.getenv("OPENAI_API_KEY"))
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "input": {
+            "contents": [
+                {"image": image_url}
+            ]
+        },
+        "parameters": {
+            "dimension": dimension,
+        }
+    }
+
+    response = _session.post(_EMBEDDING_URL, headers=headers, json=payload, timeout=30)
+    if response.status_code != 200:
+        raise Exception(f"Image embedding API error ({response.status_code}): {response.text[:200]}")
+
+    data = response.json()
+    embeddings = data.get("output", {}).get("embeddings", [])
+    if not embeddings:
+        raise Exception(f"Image embedding returned empty: {data}")
+    return embeddings[0]["embedding"]
 
 
 def cosine_similarity(vec1: List[float], vec2: List[float]) -> float:

@@ -8,18 +8,27 @@ from .video_gen import _retry_request, _SUBMIT_TIMEOUT, _POLL_TIMEOUT
 load_dotenv()
 
 # ── 图片生成模型链 ──
-# 支持 img2img（参考图）的模型 — 按优先级排列
+# 端点调用方式说明：
+#   image-generation/generation        → 异步（返回 task_id，需轮询）
+#   text2image/image-synthesis         → 异步（返回 task_id，需轮询）
+#   multimodal-generation/generation   → 同步（直接返回图片，不可带 async 头）
+# qwen-image 系列经实测走同步 multimodal 端点；带 X-DashScope-Async 头会报
+# "current user api does not support asynchronous calls"。
+_SYNC_ENDPOINTS = {"multimodal-generation/generation"}
+
+# 支持 img2img（参考图）的模型 — 按优先级排列（仅用百炼免费额度 qwen-image 系列）
 _IMG2IMG_CHAIN = [
-    ("wan2.7-image-pro",   "image-generation/generation"),   # 多模态 messages，4K，50张免费
-    ("wan2.7-image",       "image-generation/generation"),   # 多模态 messages，2K，50张免费
-    ("wan2.6-image",       "image-generation/generation"),   # 多模态 messages，50张免费
-    ("wanx-v1",            "text2image/image-synthesis"),     # V1 格式，ref_image + ref_mode，500张免费
+    # qwen-image 3.0：Arena 榜国内第一，4K，超长文本理解与精细渲染（实测可用）
+    ("qwen-image-3.0-pro", "multimodal-generation/generation"),  # 旗舰版，10张免费
+    ("qwen-image-3.0",     "multimodal-generation/generation"),  # 标准版，10张免费
+    # qwen-image 2.0-pro：额度最充足（100张），作为主力承载批量镜头
+    ("qwen-image-2.0-pro-2026-06-22", "multimodal-generation/generation"),
 ]
 # 纯文生图模型（不支持参考图，仅作为最终 fallback）
 _TEXT2IMAGE_CHAIN = [
-    ("wan2.6-t2i",         "text2image/image-synthesis"),     # 50张免费
-    ("wanx2.1-t2i-plus",   "text2image/image-synthesis"),
-    ("wanx2.1-t2i-turbo",  "text2image/image-synthesis"),
+    ("qwen-image-3.0",     "multimodal-generation/generation"),  # 纯文本也可走 messages
+    ("qwen-image-3.0-pro", "multimodal-generation/generation"),
+    ("qwen-image-2.0-pro-2026-06-22", "multimodal-generation/generation"),
 ]
 
 
@@ -28,8 +37,31 @@ def _build_payload(model: str, endpoint_type: str, prompt: str, size: str,
                    negative_prompt: str = "") -> dict:
     """根据模型类型构建不同的 payload。"""
 
+    # ── qwen-image 系列：同步 multimodal messages 格式 ──
+    # 与 wan2.x-image 的 messages 结构一致，但不支持 enable_interleave /
+    # ref_strength / negative_prompt 等 wan 专有参数，多传会被拒。
+    if model.startswith("qwen-image"):
+        content_list = []
+        if reference_image_url:
+            content_list.append({"image": reference_image_url})
+        content_list.append({"text": prompt})
+        return {
+            "model": model,
+            "input": {
+                "messages": [
+                    {"role": "user", "content": content_list}
+                ]
+            },
+            "parameters": {
+                "size": size,
+                "n": 1,
+                "watermark": False,
+            }
+        }
+
     # ── wan2.x-image 系列：多模态 messages 格式 ──
-    if model.startswith("wan2.") and model.endswith("-image"):
+    # 覆盖 wan2.6-image / wan2.7-image / wan2.7-image-pro 等带后缀的变体
+    if model.startswith("wan2.") and "-image" in model and not model.endswith("-t2i"):
         content_list = []
         if reference_image_url:
             content_list.append({"image": reference_image_url})
@@ -155,6 +187,19 @@ def _normalize_size(size: str) -> str:
     return _SIZE_MAP.get(size, size)
 
 
+# 限流退避重试配置：429/Throttling 是 API key 级别的速率限制，切换模型无效
+# （所有模型共享同一配额），必须在当前模型上退避等待速率窗口恢复。
+_RATE_LIMIT_RETRIES = 5
+_RATE_LIMIT_BACKOFF = [8, 15, 30, 45, 60]  # 递增退避（秒）
+
+
+def _is_rate_limit(text: str) -> bool:
+    """判断是否为限流类错误（429 / Throttling / RateQuota）。"""
+    low = text.lower()
+    return any(p in low for p in ("429", "throttling", "ratelimit", "rate limit",
+                                   "ratequota", "too many requests"))
+
+
 def generate_keyframe(prompt: str, size: str = "2K", reference_image_url: str = None,
                       ref_strength: float = 1.0, negative_prompt: str = "") -> str:
     """调用 DashScope 图片生成模型生成关键帧（支持参考图 + 多模型 fallback）
@@ -173,7 +218,7 @@ def generate_keyframe(prompt: str, size: str = "2K", reference_image_url: str = 
     # 标准化尺寸参数（wanx 模型只接受像素格式如 "1024*1024"）
     size = _normalize_size(size)
 
-    # 构建模型链：有参考图时优先用 img2img 链（wan2.6 → wan2.7 → wanx-v1），最后 fallback 纯文生图
+    # 构建模型链：有参考图时优先用 img2img 链（qwen-image-3.0-pro → qwen-image-3.0 → qwen-image-2.0-pro），最后 fallback 纯文生图
     if reference_image_url:
         model_chain = list(_IMG2IMG_CHAIN) + list(_TEXT2IMAGE_CHAIN)
     else:
@@ -182,7 +227,18 @@ def generate_keyframe(prompt: str, size: str = "2K", reference_image_url: str = 
     # 环境变量覆盖主模型
     env_model = os.getenv("DASHSCOPE_IMAGE_MODEL")
     if env_model:
-        model_chain = [(env_model, "text2image/image-synthesis")] + [
+        # 端点不能一律写死成 text2image，否则 qwen/wan2.x 系列会被打到错误端点。
+        # 优先复用链中已知的端点配置，未知模型再按模型名推断。
+        known = {m: e for m, e in (_IMG2IMG_CHAIN + _TEXT2IMAGE_CHAIN)}
+        if env_model in known:
+            env_endpoint = known[env_model]
+        elif env_model.startswith("qwen-image"):
+            env_endpoint = "multimodal-generation/generation"
+        elif env_model.startswith("wan2.") and "-image" in env_model:
+            env_endpoint = "image-generation/generation"
+        else:
+            env_endpoint = "text2image/image-synthesis"
+        model_chain = [(env_model, env_endpoint)] + [
             (m, e) for m, e in model_chain if m != env_model
         ]
 
@@ -190,30 +246,76 @@ def generate_keyframe(prompt: str, size: str = "2K", reference_image_url: str = 
 
     for model, endpoint_type in model_chain:
         submit_url = f"https://dashscope.aliyuncs.com/api/v1/services/aigc/{endpoint_type}"
+        is_sync = endpoint_type in _SYNC_ENDPOINTS
         headers = {
-            "X-DashScope-Async": "enable",
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        # 同步端点不能带 async 头，否则报 AccessDenied
+        if not is_sync:
+            headers["X-DashScope-Async"] = "enable"
 
         payload = _build_payload(model, endpoint_type, prompt, size, reference_image_url, ref_strength, negative_prompt)
 
         print(f"    [画师提交] 尝试模型: {model} ({endpoint_type})")
 
+        # 针对当前模型做限流退避重试：429/Throttling 是 key 级速率限制，切换模型无效，
+        # 必须在原模型上等待速率窗口恢复；只有非限流的可恢复错误才切模型。
+        rate_limited = False
+        for rl_attempt in range(_RATE_LIMIT_RETRIES + 1):
+            try:
+                # 同步端点需等待出图，超时要放宽（异步端点只是提交，很快返回）
+                post_timeout = 180 if is_sync else _SUBMIT_TIMEOUT
+
+                def _do_post():
+                    return session.post(submit_url, headers=headers, json=payload, timeout=post_timeout)
+
+                response = _retry_request(_do_post, label="画师提交")
+
+                if response.status_code != 200:
+                    err_text = response.text
+                    # 限流：退避重试当前模型，不切模型
+                    if _is_rate_limit(err_text):
+                        rate_limited = True
+                        if rl_attempt < _RATE_LIMIT_RETRIES:
+                            wait = _RATE_LIMIT_BACKOFF[min(rl_attempt, len(_RATE_LIMIT_BACKOFF) - 1)]
+                            print(f"    [WARN] 模型 {model} 触发限流(429)，{wait}s 后重试当前模型 ({rl_attempt+1}/{_RATE_LIMIT_RETRIES})...")
+                            time.sleep(wait)
+                            continue
+                        print(f"    [WARN] 模型 {model} 限流重试 {_RATE_LIMIT_RETRIES} 次仍失败，切换 fallback...")
+                        last_error = Exception(f"画师提交限流: {err_text}")
+                        break  # 跳出限流重试，切下一个模型
+                    # 其他可恢复错误（额度/模型不可用）：直接切模型
+                    if _is_quota_or_model_error(err_text):
+                        print(f"    [WARN] 模型 {model} 不可用，切换 fallback...")
+                        last_error = Exception(f"画师提交异常: {err_text}")
+                        break  # 跳出限流重试，切下一个模型
+                    raise Exception(f"画师提交异常: {err_text}")
+                else:
+                    # 成功拿到响应，跳出限流重试循环，进入后续解析
+                    rate_limited = False
+                    break
+            except Exception as e:
+                if _is_rate_limit(str(e)):
+                    rate_limited = True
+                    if rl_attempt < _RATE_LIMIT_RETRIES:
+                        wait = _RATE_LIMIT_BACKOFF[min(rl_attempt, len(_RATE_LIMIT_BACKOFF) - 1)]
+                        print(f"    [WARN] 模型 {model} 提交异常限流，{wait}s 后重试 ({rl_attempt+1}/{_RATE_LIMIT_RETRIES})...")
+                        time.sleep(wait)
+                        continue
+                    last_error = e
+                    break
+                raise
+
+        # 若因限流重试耗尽而跳出，继续下一个模型
+        if rate_limited:
+            continue
+
+        # 若因其他可恢复错误跳出（last_error 已设置）且仍在本模型循环内，继续下一个模型
+        if response.status_code != 200:
+            continue
+
         try:
-            def _do_post():
-                return session.post(submit_url, headers=headers, json=payload, timeout=_SUBMIT_TIMEOUT)
-
-            response = _retry_request(_do_post, label="画师提交")
-
-            if response.status_code != 200:
-                err_text = response.text
-                if _is_quota_or_model_error(err_text):
-                    print(f"    [WARN] 模型 {model} 不可用，切换 fallback...")
-                    last_error = Exception(f"画师提交异常: {err_text}")
-                    continue
-                raise Exception(f"画师提交异常: {err_text}")
-
             resp_data = response.json()
 
             # 检查提交级别的错误（如额度不足）
@@ -224,6 +326,16 @@ def generate_keyframe(prompt: str, size: str = "2K", reference_image_url: str = 
                     last_error = Exception(f"画师提交异常: {err_msg}")
                     continue
                 raise Exception(f"画师提交异常: {err_msg}")
+
+            # ── 同步端点：响应即结果，无需轮询 ──
+            if is_sync:
+                image_url = _extract_image_url(resp_data.get("output", {}))
+                if image_url:
+                    print(f"    [画师完成] 关键帧生成成功 ({model})")
+                    return image_url
+                print(f"    [WARN] 模型 {model} 同步返回无图片，切换 fallback...")
+                last_error = Exception(f"同步响应缺少图片: {str(resp_data)[:200]}")
+                continue
 
             task_id = resp_data.get("output", {}).get("task_id")
             if not task_id:

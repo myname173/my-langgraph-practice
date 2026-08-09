@@ -2,9 +2,12 @@
 import os
 import re
 import time
+import shutil
+import tempfile
 import requests
 from datetime import datetime
 from typing import List, Optional, Dict, Any
+from urllib.parse import urlparse
 
 # 兼容 MoviePy 1.x / 2.x
 try:
@@ -25,14 +28,17 @@ from moviepy.video.fx import Resize, Margin
 # P2-3: Color Grading (亮度统一)
 # ==============================
 def _get_clip_brightness(clip: VideoFileClip) -> float:
-    """采样 clip 中间帧的亮度均值（0-1）。"""
+    """采样 clip 多帧亮度均值（0-1），单帧易受明暗突变误导，取 3 帧均值更稳。"""
     try:
-        mid_time = clip.duration / 2
-        frame = clip.get_frame(mid_time)
-        # RGB → luminance (ITU-R BT.601)
         import numpy as np
-        gray = np.dot(frame[..., :3], [0.299, 0.587, 0.114])
-        return float(gray.mean() / 255.0)
+        d = clip.duration
+        sample_times = [d * f for f in (0.25, 0.5, 0.75)] if d > 0.5 else [d / 2]
+        vals = []
+        for tt in sample_times:
+            frame = clip.get_frame(min(tt, max(0.0, d - 0.01)))
+            gray = np.dot(frame[..., :3], [0.299, 0.587, 0.114])
+            vals.append(gray.mean() / 255.0)
+        return float(np.mean(vals))
     except Exception as e:
         print(f"      [WARN] brightness sampling failed: {e}")
         return 0.5
@@ -116,7 +122,27 @@ _WHIP_PAN_DURATION = 0.25
 # ==============================
 # 下载模块（带重试）
 # ==============================
+def _has_moov(path: str) -> bool:
+    """快速检查 mp4 是否含 moov 原子（无 moov = 索引缺失，播放器无法解析）。"""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096)
+            if b"moov" in head:
+                return True
+            # moov 可能在文件靠后位置，粗扫尾部
+            f.seek(max(0, os.path.getsize(path) - 2_000_000))
+            tail = f.read()
+            return b"moov" in tail
+    except Exception:
+        return False
+
+
 def download_video(url: str, filename: str, retries: int = 3):
+    # ── SSRF 防护：仅允许 http/https，拒绝 file:// 等本地/内网协议 ──
+    scheme = urlparse(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(f"非法视频 URL 协议 '{scheme}'，仅允许 http/https")
+
     print(f"    [下载] 获取片段: {url[-60:]}...")
 
     for attempt in range(retries):
@@ -131,6 +157,11 @@ def download_video(url: str, filename: str, retries: int = 3):
 
             if os.path.getsize(filename) < 50_000:
                 raise Exception("文件过小，疑似损坏")
+
+            # ── 完整性校验：mp4 必须含 moov 原子，否则是残缺/下载不全的片段，
+            #    带病拼接会导致最终成片无法播放（moov 缺失）。 ──
+            if not _has_moov(filename):
+                raise Exception("片段缺少 moov 原子，下载可能不完整（URL 已过期/被截断）")
 
             print(f"    [OK] Download complete: {filename}")
             return
@@ -469,6 +500,13 @@ def stitch_videos(
     temp_files: List[str] = []
     clips: List[VideoFileClip] = []
     valid_indices: List[int] = []  # 记录成功下载的原始 URL 索引
+    # 每次拼接使用独立临时目录，避免多请求并发时固定文件名互相覆盖
+    temp_dir = tempfile.mkdtemp(prefix="stitch_")
+
+    # ── 片段持久化缓存：把每个成功下载的片段存到 output/clips/，
+    #    便于排错、以及 URL 过期后仍能重新拼接（不再依赖 DashScope 临时链接）。 ──
+    clips_cache_dir = os.path.join("output", "clips")
+    os.makedirs(clips_cache_dir, exist_ok=True)
 
     try:
         # ==========================
@@ -479,11 +517,23 @@ def stitch_videos(
                 print(f"    [WARN] 跳过空 URL (镜头 {i+1})")
                 continue
 
-            temp_file = f"temp_scene_{i:02d}.mp4"
+            temp_file = os.path.join(temp_dir, f"temp_scene_{i:02d}.mp4")
+            cached_file = os.path.join(clips_cache_dir, f"scene_{i:02d}.mp4")
 
             try:
-                download_video(url, temp_file)
+                # 本地占位黑场（降级产物）：直接拷贝，不走 download_video，
+                # 保持 SSRF 防护仅约束 http(s) URL 的语义不变。
+                if os.path.isfile(url):
+                    shutil.copy2(url, temp_file)
+                else:
+                    download_video(url, temp_file)
                 temp_files.append(temp_file)
+
+                # 缓存到本地（拷贝），URL 过期后仍可重拼
+                try:
+                    shutil.copy2(temp_file, cached_file)
+                except Exception:
+                    pass
 
                 clip = VideoFileClip(temp_file)
 
@@ -572,9 +622,19 @@ def stitch_videos(
                 logger=None
             )
 
+        # 导出后完整性校验：mp4 必须含 moov 原子，否则播放器无法解析
+        if not _has_moov(output_filename):
+            raise Exception(
+                "导出文件缺少 moov 原子，成片可能损坏不可播放（请检查源片段完整性）"
+            )
+
         abs_path = os.path.abspath(output_filename)
         print(f"    [OK] Final video complete: {abs_path}")
-        return abs_path
+
+        # P1 字幕精确对齐：返回各有效片段的真实时长（秒），顺序与 valid_indices 对应。
+        # 供 stitcher_node 写回 scene["video_duration"]，使 build_srt 按真实时长对齐字幕。
+        segment_durations = [c.duration for c in clips]
+        return abs_path, valid_indices, segment_durations
 
     except Exception as e:
         print(f"    [ERROR] Stitching failed: {str(e)}")
@@ -589,9 +649,8 @@ def stitch_videos(
             except Exception:
                 pass
 
-        for f in temp_files:
-            if os.path.exists(f):
-                try:
-                    os.remove(f)
-                except Exception as e:
-                    print(f"    [WARN] 删除失败: {f} ({e})")
+        # 整目录清理，连带其中所有临时片段一并删除
+        try:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except Exception as e:
+            print(f"    [WARN] 临时目录清理失败: {temp_dir} ({e})")

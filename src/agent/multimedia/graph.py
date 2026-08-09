@@ -1,5 +1,6 @@
 # src/agent/multimedia/graph.py
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -7,6 +8,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.types import Command, interrupt
 
 from .state import MultimediaState
+from . import run_metrics  # 运行指标埋点（可观测性，零依赖，可经 RUN_METRICS_ENABLED 关闭）
 from .prompts import (
     SHOWRUNNER_PROMPT,
     DIRECTOR_SYSTEM_PROMPT,
@@ -24,9 +26,17 @@ from .tools.image_gen import generate_keyframe
 from .tools.video_gen import generate_video_from_image, FreeTierQuotaExhaustedError
 from .tools.vision_eval import evaluate_image, evaluate_video, design_camera_movement
 from .tools.video_stitcher import stitch_videos
+# P0 音频闭环：配音 / 字幕 / 混音，全部复用 GitHub 现成组件
+from .tools.tts import generate_voiceover
+from .tools.subtitle import build_srt, burn_subtitles
+from .tools.audio import generate_bgm, mix_audio, resolve_bgm_mood
 from .visual_context import build_visual_context
-from .shot_strategy import generate_shot_strategy, rewrite_strategy
-from .sequence_orchestrator import build_sequence_graph, _EMOTION_ENERGY
+from .shot_strategy import (
+    generate_shot_strategy,
+    rewrite_strategy,
+    get_consistency_threshold,
+)
+from .sequence_orchestrator import build_sequence_graph, _EMOTION_ENERGY, select_cross_scene_transition
 from .cinematic_critic import evaluate_cinematic_quality, format_critic_report, QUALITY_THRESHOLDS
 from .film_studio_orchestrator import orchestrate_film_studio
 from .cinematic_memory import reset_memory
@@ -42,6 +52,28 @@ except Exception:
 
 APPROVE_ACTIONS = {"approve", "pass", "ok", "accept", "yes", "通过", "批准"}
 REWRITE_ACTIONS = {"rewrite", "edit", "edit_prompt", "revise", "modify", "重写", "修改"}
+
+# 单镜头视频生成失败（网络/超时/接口错误）的最大重试次数。
+# 达到上限后生成占位黑场降级，继续生成其余镜头，避免单点失败拖垮整个任务。
+# 改从 thresholds.json 读取（保持默认 2，MAX_VIDEO_GEN_FAILURES env 可覆盖）。
+from .config_loader import max_video_gen_failures, character_consistency_threshold
+
+MAX_VIDEO_GEN_FAILURES = max_video_gen_failures()
+
+# 角色一致性闭环阈值：关键帧与"源头角色肖像"的 embedding 余弦相似度下限。
+# 低于该值视为角色漂移，即便 VLM 判 PASS 也触发一次重生（受 iterations 上限保护）。
+# 取值偏保守(0.5)，避免误杀正常的景别/构图差异；可用环境变量覆盖。
+# 设为 0 可关闭该闭环（回退到纯 VLM 判定）。
+CHARACTER_CONSISTENCY_THRESHOLD = character_consistency_threshold()
+
+
+# ── 视频生成失败降级：占位黑场 ──
+# 达 MAX_VIDEO_GEN_FAILURES 上限时，生成本地占位黑场 .mp4（带静音底），
+# 写入该镜头应有的 final_video_url 槽位，使 stitcher/audio_mixer 仍能拼出
+# 时间轴完整的成片，避免"静默丢镜头"导致下游错位。占位文件为本地绝对路径。
+# 实现放在 config_loader（与 graph 解耦，无重依赖），此处直接复用。
+from .config_loader import make_placeholder_clip as _make_placeholder_clip
+from .config_loader import persist_studio_output as _persist_studio_output
 
 
 def safe_parse_json(response: str) -> dict:
@@ -90,7 +122,7 @@ def _normalize_action(raw_action: Any) -> str:
     return action
 
 
-def _normalize_decision(decision: Any) -> Dict[str, Any]:
+def _normalize_decision(decision: Any, gate: str = "") -> Dict[str, Any]:
     if isinstance(decision, dict):
         out = dict(decision)
     elif isinstance(decision, str):
@@ -100,6 +132,9 @@ def _normalize_decision(decision: Any) -> Dict[str, Any]:
     else:
         out = {"action": "approve"}
     out["action"] = _normalize_action(out.get("action", "approve"))
+    # 运行指标埋点：记录人工审核卡被消费的 action（可观测性）
+    if gate:
+        run_metrics.record_human_gate(gate, out["action"])
     return out
 
 
@@ -121,15 +156,66 @@ def _normalize_scenes(scenes_value: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
+# 仅"纯质量/平台营销"词需要从 script 中剥离——这些词不表达任何视觉风格，
+# 只会污染下游生图提示词且对画面无意义。
+# 注意：合法风格词（watercolor / illustration / anime / cinematic / oil painting 等）
+# 一律不在此列——它们可能是用户故事的真实风格意图（如"水彩童话"），误删会与风格系统自相矛盾。
+_STYLE_TAIL_TOKENS = [
+    "high-quality", "high quality", "best quality", "4k", "8k", "hd",
+    "masterpiece", "trending on artstation", "artstation", "ultra-detailed",
+    "octane render", "unreal engine", "ray tracing", "cgi", "3d render",
+]
+
+
+def _sanitize_script(script: str) -> str:
+    """清洗 script：剥离 LLM 可能混入的英文风格/质量后缀，保证 script 纯净且仅含中文叙事。
+
+    兜底措施，配合 SHOWRUNNER_PROMPT 的「script 纯净度硬性规则」双保险。
+    """
+    if not script:
+        return script
+    text = script.strip()
+    # 1) 截掉从第一个英文字母片段开始的尾部（多为风格后缀段）
+    #    若正文本身含英文（如镜头标注"全景镜头："是中文，但"Shot 2"这类），仅剥离末尾连续英文段。
+    # 策略：从右向左，找到最后一个中文字符位置，截断其后的所有内容。
+    last_cjk = -1
+    for idx, ch in enumerate(text):
+        if "\u4e00" <= ch <= "\u9fff" or ch in "，。：、！？…—（）《》":
+            last_cjk = idx
+    if last_cjk >= 0 and last_cjk < len(text) - 1:
+        text = text[: last_cjk + 1]
+    # 2) 显式剔除残留的风格 token（小写匹配，处理被中文句号分隔但仍混入的情况）
+    low = text.lower()
+    for tok in _STYLE_TAIL_TOKENS:
+        if tok in low:
+            # 删除该 token 及其可能的标点/空格残留
+            text = re.sub(rf"\s*{re.escape(tok)}\b\s*", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    # 3) 若截断后无结尾标点，补中文句号
+    if text and not text[-1] in "。！？…":
+        text += "。"
+    return text
+
+
 def _scene_base(script: str) -> Dict[str, Any]:
     return {
         "script": script,
+        # ── 情节密度字段（Phase 0 总导演结构化输出，用于强化首尾帧可见内容）──
+        "scale": "",                 # 景别
+        "camera_note": "",           # 镜头运动与角度
+        "action_beat": "",           # 镜头内主体连续可见动作（起始→结束）
+        "visual_elements": [],       # 可辨识环境/道具/光影细节列表
+        "emotion": "",               # 该镜头情绪
+        "beat": "",                  # 叙事功能（setup/inciting/develop/turn/climax/fallout/resolution）
+        "transition_in": "",         # 承接上一镜头的可见动作，保证因果连贯
         "iterations": 0,
         "critique": "无",
         "is_perfect": False,
         "image_prompt": "",
         "image_url": "",
-        "embedding_similarity": None,
+        "embedding_similarity": None,   # 与上一镜头关键帧的相似度
+        "portrait_similarity": None,    # 与源头角色肖像的相似度（角色一致性度量）
+        "continuity_score": None,       # 连贯性可观测分数汇总
         "image_auto_feedback": "",
         
         # 尾帧相关字段
@@ -140,7 +226,8 @@ def _scene_base(script: str) -> Dict[str, Any]:
         "last_image_is_perfect": False,
         "last_image_auto_feedback": "",
 
-        "video_iterations": 0,
+        "video_iterations": 0,      # 质量重试计数（审片不通过触发重新运镜+生成）
+        "video_gen_failures": 0,    # 生成失败计数（网络/超时/接口错误），与质量重试分离
         "video_critique": "无",
         "video_is_perfect": False,
         "video_prompt": "",
@@ -166,7 +253,8 @@ def visual_context_builder_node(state: MultimediaState):
 
     # ── 跨镜头状态重置：防止上一镜头的残留数据污染当前镜头 ──
     scene_resets = {}
-    for field in ("shot_plan", "sequence_graph", "critic_eval", "studio_output"):
+    for field in ("shot_plan", "sequence_graph", "critic_eval",
+                  "studio_output", "studio_output_path", "studio_summary"):
         if state.get(field) is not None:
             scene_resets[field] = None
     if state.get("rewrite_count", 0) != 0:
@@ -405,9 +493,10 @@ def director_refine_node(state: MultimediaState):
             scene.get("script", ""), state.get("global_setting", "")
         )
 
-        # 风格后缀
-        style_key = state.get("visual_style") or _detect_visual_style(state.get("task", ""))
-        style_suffix = _STYLE_PRESETS.get(style_key, _STYLE_PRESETS[_DEFAULT_STYLE_KEY])["suffix"]
+        # 风格后缀（统一从 state 解析，单一数据源）
+        style = _resolve_style(state)
+        style_key = style["style_key"]
+        style_suffix = style["style_suffix"]
 
         prompt = DIRECTOR_REFINEMENT_PROMPT.format(
             image_prompt=image_prompt,
@@ -498,8 +587,21 @@ def film_studio_node(state: MultimediaState):
     if refined_seq_graph.get("formatted_graph"):
         print(f"    [*] Sequence graph refined by editor agent")
 
+    # 大 state 瘦身：studio_result 是嵌套 3 Agent 结果 + 大报告字符串，若直接随 state
+    # 入库会显著拉长 checkpointer 持锁时长、加剧死锁。改为落盘存路径指针，state 仅留
+    # 摘要级字段（共识度/修改数/冲突数）+ 路径，下游需要时按路径读回。
+    studio_output_path = _persist_studio_output(studio_result, idx)
+    studio_summary = {
+        "consensus": studio_result.get("studio_consensus"),
+        "modification_count": len(studio_result.get("modifications", [])),
+        "debate_count": len(studio_result.get("debate", [])),
+        "studio_output_path": studio_output_path,
+    }
+
     return {
-        "studio_output": studio_result,
+        "studio_output": None,             # 剥离大对象，避免随 state 入库
+        "studio_output_path": studio_output_path,
+        "studio_summary": studio_summary,
         "shot_plan": refined_shot_plan,
         "sequence_graph": refined_seq_graph,
     }
@@ -516,56 +618,89 @@ def _build_narrative_arc(scenes: List[Dict]) -> Dict[str, Any]:
         "emotion_trajectory": [(index, energy_level, label), ...],
         "scene_functions": ["opening", "building", ...],
         "causal_chain": ["Scene 1: ...", "Scene 2: ...", ...],
+        "missing_beats": [...],   # 三幕弧线缺失的环节（空=完整）
         "formatted_block": str,  # 直接注入 director prompt 的格式化文本
     }
     """
     n = len(scenes)
     if n == 0:
-        return {"formatted_block": ""}
+        return {"formatted_block": "", "missing_beats": [], "scene_functions": []}
 
     # ── 1. 为每个场景分配叙事功能 ──
-    _FUNCTION_MAP = {
-        0: "opening",        # 建立世界观、角色登场
-    }
+    # 优先使用 showrunner 显式给出的 beat（真实情节功能），否则回退到序号规则
+    _VALID_BEATS = {"setup", "inciting", "develop", "turn", "climax", "fallout", "resolution"}
     scene_functions = []
-    for i in range(n):
-        if i == 0:
-            scene_functions.append("opening")
-        elif i == n - 1:
-            scene_functions.append("resolution")
-        elif i == n - 2 and n > 3:
-            scene_functions.append("climax")
-        elif n > 4 and i == (n // 2):
-            scene_functions.append("turning_point")
+    used_beats = set()
+    for i, scene in enumerate(scenes):
+        raw_beat = (scene.get("beat") or "").strip().lower()
+        if raw_beat in _VALID_BEATS:
+            scene_functions.append(raw_beat)
+            used_beats.add(raw_beat)
         else:
-            scene_functions.append("building")
+            # 回退规则：保证每个镜头都有明确叙事功能，避免全片平铺直叙
+            if i == 0:
+                scene_functions.append("setup")
+            elif i == n - 1:
+                scene_functions.append("resolution")
+            elif i == n - 2 and n > 3:
+                scene_functions.append("climax")
+            elif n > 4 and i == (n // 2):
+                scene_functions.append("turn")
+            else:
+                scene_functions.append("develop")
 
-    # ── 2. 情绪轨迹（线性递增/递减/弧形）──
-    # 默认弧形：低→高→peak→缓降→收尾
+    # ── 2. 情绪轨迹（叙事功能 → 能量值）──
     _ARC_ENERGY = {
-        "opening": 0.4,
-        "building": 0.55,
-        "turning_point": 0.7,
+        "setup": 0.4,
+        "inciting": 0.55,
+        "develop": 0.6,
+        "turn": 0.8,
         "climax": 0.95,
-        "resolution": 0.6,
+        "fallout": 0.7,
+        "resolution": 0.5,
     }
     emotion_trajectory = []
     for i, func in enumerate(scene_functions):
         energy = _ARC_ENERGY.get(func, 0.5)
         emotion_trajectory.append((i + 1, energy, func))
 
-    # ── 3. 因果链（从 script 提取承接/铺垫关系）──
+    # ── 3. 因果链（承接上一镜的可见动作 + 本镜动作，保证镜头间连贯）──
     causal_chain = []
     for i, scene in enumerate(scenes):
         script = scene.get("script", "")[:80]
         func = scene_functions[i]
-        causal_chain.append(f"Scene {i+1} [{func}]: {script}")
+        transition = scene.get("transition_in", "")
+        action = scene.get("action_beat", "")
+        if i == 0:
+            causal_chain.append(f"Scene 1 [{func}]: {script}")
+        else:
+            causal_chain.append(
+                f"Scene {i+1} [{func}]: 承接上一镜「{transition}」→ 本镜动作「{action}」"
+            )
 
     # ── 4. 格式化输出块 ──
     func_lines = []
     for i, func in enumerate(scene_functions):
         script_preview = scenes[i].get("script", "")[:50]
         func_lines.append(f"    Scene {i+1} ({func}): \"{script_preview}...\"")
+    # ── 5. 完整故事三幕弧线校验（借鉴三幕式 beat sheet）──
+    # 一个完整故事需覆盖：起(setup/inciting) → 承(develop) → 转(turn) → 合(climax) → 收(resolution)
+    _arc_required = {
+        "setup": ("setup", "inciting"),
+        "develop": ("develop",),
+        "turn": ("turn",),
+        "climax": ("climax",),
+        "resolution": ("resolution", "fallout"),
+    }
+    _missing = []
+    for label, keys in _arc_required.items():
+        if not (used_beats & set(keys)):
+            _missing.append(label)
+    if _missing and n > 1:
+        func_lines.append(
+            f"    [!] 故事不完整：缺少三幕弧线上的环节 {_missing}。"
+            f"请补出对应镜头，使其构成 起(setup/inciting)→承(develop)→转(turn)→合(climax)→收(resolution) 的完整闭环。"
+        )
 
     energy_curve = " -> ".join(f"{e:.1f}" for _, e, _ in emotion_trajectory)
 
@@ -582,6 +717,7 @@ def _build_narrative_arc(scenes: List[Dict]) -> Dict[str, Any]:
         "emotion_trajectory": emotion_trajectory,
         "scene_functions": scene_functions,
         "causal_chain": causal_chain,
+        "missing_beats": _missing if n > 1 else [],
         "formatted_block": formatted,
     }
 
@@ -590,13 +726,23 @@ def _build_narrative_arc(scenes: List[Dict]) -> Dict[str, Any]:
 def showrunner_node(state: MultimediaState):
     print("\n--- 👑[节点1: 总导演] 正在拆解长视频分镜剧本 ---")
 
+    # 运行指标埋点：开启一条 run record（可观测性）
+    run_metrics.start_run(state.get("task", ""), len(state.get("scenes", [])))
+
     # 清空跨运行累积的风格记忆单例，防止脏数据污染 Global Film Brain 报告
     reset_memory()
 
-    # 检测视觉风格（首次检测，存入 state 供下游复用）
-    style_key = _detect_visual_style(state["task"])
+    # 抽取视觉风格（LLM 驱动，从 task+global_setting+story 识别；存入 state 供下游复用）
+    style = _resolve_style(state)
+    style_key = style["style_key"]
+    state["visual_style"] = style_key
+    state["style_suffix"] = style["style_suffix"]
+    state["style_description"] = style["style_description"]
     style_context = _build_style_context(style_key)
-    print(f"    [*] 检测到视觉风格: {style_key}")
+    print(f"    [*] 检测到视觉风格: {style_key}（{style['style_description']}）")
+    if style_key == "neutral":
+        print("    [WARN] 未能从输入识别出明确视觉风格，已用中性兜底（非写实 CG）。"
+              " 若需指定风格，请在 task / global_setting 中描述（如「水彩」「赛博朋克 CG」）。")
 
     # 检测内容类型
     content_type = _detect_content_type(state["task"])
@@ -606,12 +752,42 @@ def showrunner_node(state: MultimediaState):
         task=state["task"],
         style_context=style_context,
     )
-    response = call_llm(prompt, "总导演")
 
-    parsed_data = safe_parse_json(response)
-
-    global_setting = parsed_data.get("global_setting", "无全局设定")
-    raw_scenes = parsed_data.get("scenes", [])
+    # ── 故事完整性自愈循环（借鉴 LangGraph 多智能体 Reviewer 校验→重跑）──
+    # 若总导演生成的剧本缺三幕弧线环节（如缺 turn/climax/resolution），
+    # 把缺失环节作为补全指令追加进 prompt 重新生成，最多重试 2 次，保证"情节一定完整"。
+    raw_scenes = []
+    global_setting = "无全局设定"
+    _MAX_SHOWRUNNER_RETRIES = 2
+    for _attempt in range(_MAX_SHOWRUNNER_RETRIES + 1):
+        response = call_llm(prompt, "总导演")
+        parsed_data = safe_parse_json(response)
+        global_setting = parsed_data.get("global_setting", global_setting)
+        raw_scenes = parsed_data.get("scenes", [])
+        if not raw_scenes:
+            print("    [!] 总导演未返回有效 scenes，重试...")
+            continue
+        # 用已解析的 scene 字段做三幕弧线校验
+        _probe = [{
+            "script": s.get("script", s.get("description", "")),
+            "beat": s.get("beat", ""),
+        } for s in raw_scenes]
+        _arc = _build_narrative_arc(_probe)
+        _missing = _arc.get("missing_beats", [])
+        if _missing:
+            print(f"    [!] 故事不完整，缺三幕环节 {_missing}，要求总导演补全后重试 "
+                  f"({_attempt+1}/{_MAX_SHOWRUNNER_RETRIES})...")
+            prompt = SHOWRUNNER_PROMPT.format(
+                task=state["task"],
+                style_context=style_context,
+            ) + (
+                f"\n\n[校验反馈-必须修正] 你刚才的剧本不完整：缺少三幕弧线上的环节 {_missing}。"
+                f"请在不删减现有镜头的前提下，补出对应镜头，使其构成 "
+                f"起(setup/inciting)→承(develop)→转(turn)→合(climax)→收(resolution) 的完整闭环，"
+                f"并重写完整 JSON。"
+            )
+            continue
+        break  # 完整，跳出重试
 
     print(f"[*] 成功生成全局设定: {global_setting[:60]}...")
     print(f"[*] 成功拆解出 {len(raw_scenes)} 个连续镜头！")
@@ -629,9 +805,26 @@ def showrunner_node(state: MultimediaState):
 
     processed_scenes =[]
     for i, s in enumerate(raw_scenes):
-        scene_item = _scene_base(s.get("script", s.get("description", "")))
+        raw_script = s.get("script", s.get("description", ""))
+        # ── 兜底清洗：剥离 LLM 可能混入的英文风格/质量后缀（如 "high-quality anime..."），
+        #    避免污染导演生图提示词，并与统一 style_suffix 冲突 ──
+        raw_script = _sanitize_script(raw_script)
+        scene_item = _scene_base(raw_script)
+        # ── 情节密度字段：从总导演的结构化输出中提取，强化首尾帧可见内容 ──
+        scene_item["scale"] = s.get("scale", "")
+        scene_item["camera_note"] = s.get("camera_note", "")
+        scene_item["action_beat"] = s.get("action_beat", "")
+        ve = s.get("visual_elements", [])
+        scene_item["visual_elements"] = ve if isinstance(ve, list) else []
+        scene_item["emotion"] = s.get("emotion", "")
+        scene_item["beat"] = s.get("beat", "")
+        scene_item["transition_in"] = s.get("transition_in", "")
         processed_scenes.append(scene_item)
         print(f"    Shot {i+1} script ready: {scene_item['script'][:60]}...")
+        if scene_item["action_beat"]:
+            print(f"         ↳ 可见动作: {scene_item['action_beat'][:50]}...")
+        if scene_item["visual_elements"]:
+            print(f"         ↳ 视觉细节: {len(scene_item['visual_elements'])} 项")
 
     # ── P2-1: Build narrative arc from scenes (rule-based, no LLM call) ──
     narrative_arc = _build_narrative_arc(processed_scenes)
@@ -673,7 +866,7 @@ def showrunner_review_gate_node(state: MultimediaState):
         "message": "请审查总导演输出的全局设定与分镜列表。可直接通过，也可修改 global_setting / scenes 后再继续。",
         "actions":["approve", "rewrite", "edit_prompt"],
     }
-    decision = _normalize_decision(interrupt(payload))
+    decision = _normalize_decision(interrupt(payload), gate="showrunner_review")
 
     scenes = state["scenes"]
     global_setting = state["global_setting"]
@@ -712,6 +905,9 @@ def showrunner_review_gate_node(state: MultimediaState):
         "global_setting": global_setting,
         "scenes": scenes,
         "character_portrait_url": character_portrait_url,
+        "visual_style": state.get("visual_style"),
+        "style_suffix": state.get("style_suffix"),
+        "style_description": state.get("style_description"),
     }
 
 
@@ -729,8 +925,9 @@ def reference_gen_node(state: MultimediaState):
     global_setting = state.get("global_setting", "")
     scenes = state.get("scenes", [])
     task = state.get("task", "")
-    style_key = state.get("visual_style") or _detect_visual_style(task)
-    style_suffix = _STYLE_PRESETS.get(style_key, {}).get("suffix", "")
+    style = _resolve_style(state)
+    style_key = style["style_key"]
+    style_suffix = style["style_suffix"]
 
     try:
         sheets = generate_reference_sheets(
@@ -790,6 +987,45 @@ _SEQUENCE_PATTERNS = [
 #   strip_keywords  — 当此风格被选中时，需要从 LLM 输出中清理的 AAA 专属术语
 #   detect_keywords — 从用户 task 中检测此风格的中英文关键词
 # ============================================================
+
+# 通用冲突词：所有"非写实渲染"风格生图时都应剥离的写实CG术语。
+# 抽出为单一来源，避免在每个 preset 的 strip_keywords 里重复维护一大串（解耦）。
+_GENERIC_CONFLICT_KEYWORDS = [
+    "unreal engine", "ue5", "ray tracing", "raytracing", "octane render",
+    "aaa game", "aaa cg", "game cg", "3d cg", "cgi trailer", "photorealistic",
+    "hyperrealistic", "nvidia rtx", "volumetric lighting", "subsurface scattering",
+]
+
+
+def _get_conflict_keywords(style_key: str) -> List[str]:
+    """返回某风格生图时应剥离的冲突词。
+
+    动态合并（解耦）：通用写实词 ∪ 该风格特有 strip_keywords，
+    但**排除本风格自身 preset 里用到的词**（避免写实风格 aaa_cg 把自己
+    的 "Unreal Engine" 也剥掉 —— 自相矛盾）。
+
+    新增风格自动继承通用冲突词，无需在各 preset 重复写死。
+    """
+    preset = _STYLE_PRESETS.get(style_key, {})
+    # 本风格自身用到的词（suffix + detect_keywords），不应作为冲突被剥除
+    own_terms = set()
+    for blob in (preset.get("suffix", ""), " ".join(preset.get("detect_keywords", []) or [])):
+        for kw in _GENERIC_CONFLICT_KEYWORDS:
+            if kw.lower() in blob.lower():
+                own_terms.add(kw.lower())
+    extra = preset.get("strip_keywords", []) or []
+    merged = _GENERIC_CONFLICT_KEYWORDS + extra
+    # 去重、保序，并剔除「本风格自己用到的词」
+    seen = set()
+    result = []
+    for kw in merged:
+        k = kw.lower()
+        if k in seen or k in own_terms:
+            continue
+        seen.add(k)
+        result.append(kw)
+    return result
+
 
 _STYLE_PRESETS: Dict[str, Dict[str, Any]] = {
     "aaa_cg": {
@@ -930,13 +1166,23 @@ _STYLE_PRESETS: Dict[str, Dict[str, Any]] = {
             "clay", "puppet", "微缩", "miniature", "Laika",
         ],
     },
+    # 中性兜底风格：不偏向任何渲染流派（非写实 CG、非卡通、非水彩）。
+    # 仅当「未识别到任何风格」时使用，避免静默把用户故事套成廉价 3D（上次画风崩坏的根因）。
+    # 它提供一段「无流派偏向」的通用画面质量标准，让下游节点安全降级而非硬套 UE5。
+    "neutral": {
+        "suffix": "coherent illustrative visual style, clean readable composition, consistent lighting and palette",
+        "strip_keywords": [],
+        "detect_keywords": [],
+    },
 }
 
 # AAA 后缀关键词列表——用于检测 prompt 中是否已有部分风格信息
 _AAA_STYLE_KEYWORDS = ["cinematic", "8k", "masterpiece", "unreal engine", "ray tracing"]
 
-# 向后兼容：默认风格（当没有检测到任何 style 关键词时使用）
-_DEFAULT_STYLE_KEY = "aaa_cg"
+# 向后兼容：默认风格（当没有检测到任何 style 关键词 / LLM 抽取失败时）。
+# 注意：默认是「中性」而非「写实 CG」——避免未识别风格时静默套上廉价 3D 渲染，
+# 违背「风格应顺用户输入」的原则。写实 CG(aaa_cg) 仅在用户输入明确命中其关键词时才生效。
+_DEFAULT_STYLE_KEY = "neutral"
 
 # ============================================================
 # 风格质量标准（Quality Bar）
@@ -959,6 +1205,7 @@ _STYLE_QUALITY_BAR: Dict[str, str] = {
     "minimalist": "Elegant simplicity, balanced negative space, precise geometric relationships, refined visual restraint",
     "retro_vhs": "Authentic analog degradation, nostalgic color palette, convincing lo-fi texture, retro aesthetic coherence",
     "stop_motion": "Tangible material quality, charming miniature detail, warm practical lighting feel, handcrafted animation aesthetic",
+    "neutral": "Coherent and clean visual quality, consistent lighting and palette, readable composition, no jarring rendering artifacts",
 }
 
 
@@ -982,6 +1229,152 @@ def _build_style_context(style_key: str) -> str:
         f"Quality Standard: {quality}\n"
         f"Style Suffix (must append to every image prompt): {preset['suffix']}"
     )
+
+
+# LLM 风格抽取专用 prompt：从用户输入（task + global_setting + story）识别视觉风格，
+# 输出结构化 JSON。命中预设库时用 preset key；未命中时给出英文 style_prompt 由系统直接使用。
+# 不维护任何硬编码风格表——"输入什么故事就什么风格"。
+_VISUAL_STYLE_EXTRACT_PROMPT = """你是一个视频视觉风格分析器。根据用户提供的故事/任务描述，判断最适合的视觉呈现风格。
+
+# 已知风格预设（若匹配请直接用其 key，可保证生图质量）：
+{style_keys}
+
+# 判断依据（综合阅读以下全部文本）：
+{inputs}
+
+# 输出要求（严格 JSON，不要多余文字）：
+{{
+  "style_key": "命中上面某个预设 key 则填它；都不匹配则填 \"custom\"",
+  "label": "风格的中文短标签（如：水彩童话 / 赛博朋克CG / 水墨武侠）",
+  "description": "一句话英文风格描述，供导演与审核节点理解风格基调",
+  "style_prompt": "若 style_key 为 custom，给出一段英文生图风格后缀（逗号分隔，描述该风格的画面质感/笔触/光影/色调）；若命中预设则可留空"
+}}
+
+注意：风格必须忠实于用户输入的故事气质，不要强行套用预设，也不要替用户预设「某类题材就该用某风格」。
+- 若输入已明确给出风格意图（如「水彩」「赛博朋克 CG」「水墨」），应尊重该意图选择/输出对应风格。
+- 若输入未明确风格，则根据故事整体气质推断最贴切的风格（命中预设或输出 custom）。
+- 不要为了匹配预设而扭曲用户输入的本意。"""
+
+
+def _extract_visual_style(state: MultimediaState) -> Dict[str, str]:
+    """LLM 驱动的风格抽取：从 task + global_setting + story 识别视觉风格。
+
+    返回 dict: {"style_key", "style_suffix", "style_description"}。
+    命中预设库 -> style_suffix 取预设 suffix（质量最优）；
+    自定义风格 -> style_suffix 取 LLM 给的 style_prompt。
+    LLM 失败则回退到关键词检测。
+    """
+    task = state.get("task", "") or ""
+    global_setting = state.get("global_setting", "") or ""
+    story = state.get("story", "") or state.get("script", "") or ""
+
+    style_keys_block = "\n".join(f"  - {k}: {_STYLE_PRESETS[k]['suffix']}" for k in _STYLE_PRESETS)
+    inputs_block = (
+        f"[task]\n{task}\n\n"
+        f"[global_setting]\n{global_setting}\n\n"
+        f"[story]\n{story[:2000]}"
+    )
+    prompt = _VISUAL_STYLE_EXTRACT_PROMPT.format(
+        style_keys=style_keys_block, inputs=inputs_block
+    )
+
+    # 兜底默认值：LLM 不可用时，使用「中性兜底」而非关键词猜测。
+    # 关键点：不能让 _detect_visual_style 用关键词硬猜（如把"动画短片"误判成 anime），
+    # 那会违背「风格顺用户输入、不随意发挥」的原则。中性兜底只提供通用画面质量标准，
+    # 不偏向任何渲染流派，是最安全的降级（见 _DEFAULT_STYLE_KEY 设计注释）。
+    fallback_key = _DEFAULT_STYLE_KEY
+    result = {
+        "style_key": fallback_key,
+        "style_suffix": _STYLE_PRESETS.get(fallback_key, _STYLE_PRESETS[_DEFAULT_STYLE_KEY])["suffix"],
+        "style_description": fallback_key.replace("_", " ").title(),
+    }
+
+    try:
+        raw = call_llm(prompt, "风格抽取")
+        parsed = _safe_json_loads(raw)
+        if not parsed:
+            return result
+        key = (parsed.get("style_key") or "").strip()
+        if key and key in _STYLE_PRESETS:
+            result["style_key"] = key
+            result["style_suffix"] = _STYLE_PRESETS[key]["suffix"]
+        elif key == "custom" or (key and key not in _STYLE_PRESETS):
+            # 自定义风格：使用 LLM 给出的英文 style_prompt
+            custom_prompt = (parsed.get("style_prompt") or "").strip()
+            result["style_key"] = key if key != "custom" else f"custom:{parsed.get('label', 'custom')}"
+            result["style_suffix"] = custom_prompt or result["style_suffix"]
+        result["style_description"] = parsed.get("description") or parsed.get("label") or result["style_description"]
+    except Exception as e:
+        print(f"    [风格抽取] LLM 失败，回退关键词检测: {e}")
+    return result
+
+
+def _resolve_style(state: MultimediaState) -> Dict[str, str]:
+    """统一风格解析入口：优先读 state 缓存，否则抽取并写回。
+
+    下游所有节点都应调用此函数，而非自行调用 _detect_visual_style，
+    以保证整条流水线使用同一个风格身份（单一数据源，低耦合）。
+    """
+    if state.get("style_suffix") and state.get("visual_style"):
+        return {
+            "style_key": state["visual_style"],
+            "style_suffix": state["style_suffix"],
+            "style_description": state.get("style_description") or state["visual_style"],
+        }
+    extracted = _extract_visual_style(state)
+    return extracted
+
+
+def _safe_json_loads(text: str) -> Optional[dict]:
+    """容错解析 LLM 返回的 JSON（兼容 ```json 包裹 / 前后多余文本）。"""
+    if not text:
+        return None
+    text = text.strip()
+    if text.startswith("```"):
+        # 去掉 ```json ... ``` 包裹
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except Exception:
+        return None
+
+
+_TRANSLATE_PROMPT = """你是一个专业的图像/视频提示词翻译器。将下面的中文视觉描述翻译成地道、高质量的英文图像生成提示词。
+
+要求：
+- 保留所有视觉信息：景别、主体、动作、表情、服装、环境、光影、构图、镜头运动。
+- 使用英文图像生成模型偏好的表达方式（具体名词、形容词，逗号分隔）。
+- 不要添加原文没有的风格词或质量词（风格由系统统一注入）。
+- 只输出翻译结果，不要解释、不要引号包裹。
+
+中文描述：
+{text}"""
+
+
+def _translate_to_english(text: str, purpose: str = "image") -> str:
+    """将中文提示词翻译为英文（生图/视频模型对英文理解更佳）。
+
+    纯文本转换函数，与具体视觉风格无关，低耦合。
+    LLM 失败时原样返回（中文直喂，不阻断主流程）。
+    """
+    if not text:
+        return text
+    # 若本就基本是英文（无中文字符），直接返回，省一次调用
+    if not any("\u4e00" <= ch <= "\u9fff" for ch in text):
+        return text
+    try:
+        translated = call_llm(_TRANSLATE_PROMPT.format(text=text), "提示词翻译")
+        translated = translated.strip().strip('"').strip("'")
+        if translated:
+            return translated
+    except Exception as e:
+        print(f"    [WARN] 提示词翻译失败，使用原文: {e}")
+    return text
 
 
 def _detect_visual_style(task: str) -> str:
@@ -1532,15 +1925,38 @@ def director_node(state: MultimediaState):
     critique = scene.get("critique", "无")
     protected_specs_text = _extract_protected_specs(scene["script"], global_setting)
 
+    # ── 角色 Visual DNA 锁：把累积的角色外观特征强制并入受保护规格 ──
+    # 借鉴 ViMax/ArcReel 的「角色视觉 DNA」思想：跨镜头单调并锁定外貌，
+    # 防止生图模型在相邻镜头里把角色发型/服饰/五官悄悄改写。
+    character_identity = (state.get("scene_anchors") or {}).get("character_identity") or {}
+    dna_appearance = character_identity.get("appearance") or []
+    dna_subject = character_identity.get("subject", "")
+    if dna_appearance:
+        dna_block = "；".join(dna_appearance)
+        if dna_block not in protected_specs_text:
+            protected_specs_text = (
+                protected_specs_text.rstrip("。") + f"；【角色视觉DNA-必须严格保持一致】{dna_subject}：{dna_block}。"
+            )
+            print(f"    [*] 角色视觉DNA锁注入：{dna_subject}（{len(dna_appearance)} 项外观）")
+
     # ── 环境锚点（防止跨场景环境漂移）──
     environment_anchor = _extract_environment_anchors(global_setting, scene["script"])
     if environment_anchor:
         print(f"    [*] Environment anchor injected")
 
-    # 风格上下文
-    style_key = state.get("visual_style") or _detect_visual_style(state.get("task", ""))
+    # ── 情节密度字段（Phase 0 结构化输出，强化首帧可见内容）──
+    action_beat = scene.get("action_beat", "")
+    visual_elements = scene.get("visual_elements", []) or []
+    visual_elements_block = "\n".join(f"- {v}" for v in visual_elements) if visual_elements else "（无额外细节，请从 script 与环境锚点中自行推断具体可见细节）"
+    camera_note = scene.get("camera_note", "")
+    emotion = scene.get("emotion", "")
+    transition_in = scene.get("transition_in", "")
+
+    # 风格上下文（统一从 state 解析）
+    style = _resolve_style(state)
+    style_key = style["style_key"]
     style_context = _build_style_context(style_key)
-    style_suffix = _STYLE_PRESETS.get(style_key, _STYLE_PRESETS[_DEFAULT_STYLE_KEY])["suffix"]
+    style_suffix = style["style_suffix"]
 
     prompt = DIRECTOR_SYSTEM_PROMPT.format(
         global_setting=global_setting,
@@ -1555,14 +1971,22 @@ def director_node(state: MultimediaState):
         environment_anchor=environment_anchor,
         style_context=style_context,
         style_suffix=style_suffix,
+        action_beat=action_beat or "（无，请从 script 中提取主体可见动作）",
+        visual_elements_block=visual_elements_block,
+        camera_note=camera_note or "（未指定）",
+        emotion=emotion or "（未指定）",
+        transition_in=transition_in or "（开场镜头，无需承接）",
     )
     image_prompt = call_llm(prompt, "导演")
 
     # 安全网：截掉 director 可能附加的多镜头序列列表
     _preset = _get_style_preset(state)
+    _style_key = _resolve_style(state)["style_key"]
     image_prompt = _sanitize_single_frame_prompt(
-        image_prompt, _preset["suffix"], _preset.get("strip_keywords", [])
+        image_prompt, _preset["suffix"], _get_conflict_keywords(_style_key)
     )
+    # 翻译层：生图/视频模型对英文 prompt 出图质量显著更高，将中文叙事翻译为英文再喂模型
+    image_prompt = _translate_to_english(image_prompt, purpose="image")
 
     scenes = state["scenes"].copy()
     scenes[idx]["image_prompt"] = image_prompt
@@ -1591,7 +2015,7 @@ def prompt_preview_node(state: MultimediaState):
         "actions": ["approve", "edit_prompt", "rewrite"],
     }
 
-    decision = _normalize_decision(interrupt(payload))
+    decision = _normalize_decision(interrupt(payload), gate="prompt_preview")
     action = decision.get("action", "approve")
 
     scenes = state["scenes"].copy()
@@ -1601,8 +2025,9 @@ def prompt_preview_node(state: MultimediaState):
         edited = str(decision["image_prompt"]).strip()
         # 编辑后也走安全网
         _preset = _get_style_preset(state)
+        _style_key = _resolve_style(state)["style_key"]
         edited = _sanitize_single_frame_prompt(
-            edited, _preset["suffix"], _preset.get("strip_keywords", [])
+            edited, _preset["suffix"], _get_conflict_keywords(_style_key)
         )
         scenes[idx]["image_prompt"] = edited
         scenes[idx]["is_perfect"] = True  # 用户手动确认的，直接通过
@@ -1644,7 +2069,7 @@ def end_frame_prompt_preview_node(state: MultimediaState):
         "actions": ["approve", "edit_prompt", "rewrite"],
     }
 
-    decision = _normalize_decision(interrupt(payload))
+    decision = _normalize_decision(interrupt(payload), gate="end_frame_prompt_preview")
     action = decision.get("action", "approve")
 
     scenes = state["scenes"].copy()
@@ -1653,8 +2078,9 @@ def end_frame_prompt_preview_node(state: MultimediaState):
     if decision.get("image_prompt") is not None and action == "edit_prompt":
         edited = str(decision["image_prompt"]).strip()
         _preset = _get_style_preset(state)
+        _style_key = _resolve_style(state)["style_key"]
         edited = _sanitize_single_frame_prompt(
-            edited, _preset["suffix"], _preset.get("strip_keywords", [])
+            edited, _preset["suffix"], _get_conflict_keywords(_style_key)
         )
         scenes[idx]["last_image_prompt"] = edited
         scenes[idx]["last_image_is_perfect"] = True
@@ -1750,6 +2176,10 @@ def image_gen_node(state: MultimediaState):
     reference_sheets = state.get("reference_sheets") or {}
     script_text = scene.get("script", "").lower()
 
+    # 源头角色肖像（showrunner 通过后生成的标准角色 ID 基准）。
+    # 关键：所有场景对齐"同一个源头基准"，抑制链式(逐场景)传递导致的角色漂移(drift)。
+    character_portrait_url = state.get("character_portrait_url")
+
     # ── 使用 helper 匹配当前场景涉及的角色/道具/环境 ──
     ref_match = _match_reference_elements(reference_sheets, script_text)
     matched_char_url = ref_match["char_url"]
@@ -1771,6 +2201,12 @@ def image_gen_node(state: MultimediaState):
         reference_url = matched_char_url
         ref_strength = 0.5
         print(f"    [*] Using matched character reference (ref_strength={ref_strength})")
+    elif character_portrait_url:
+        # 源头基准兜底：无 FLF 尾帧 / 无匹配角色参考时，用源头角色肖像做 img2img，
+        # 保证角色身份对齐源头基准，而非退化为无参考(漂移风险最高)。
+        reference_url = character_portrait_url
+        ref_strength = 0.4
+        print(f"    [*] Using source character portrait as anchor reference (ref_strength={ref_strength})")
     elif ref_match["env_url"]:
         # Fallback: 环境参考图
         reference_url = ref_match["env_url"]
@@ -1784,16 +2220,30 @@ def image_gen_node(state: MultimediaState):
         identity_anchors.append(f"[Character Identity Anchor: {matched_char_desc}]")
     if matched_prop_desc:
         identity_anchors.append(f"[Prop Identity Anchor: {matched_prop_desc}]")
+    # 角色肖像文本级恒定锚点：即便本帧参考图用的是"上一场景尾帧"(链式)，
+    # 也始终提示模型对齐源头角色外观，进一步抑制跨场景漂移。
+    if character_portrait_url and reference_url != character_portrait_url:
+        identity_anchors.append(
+            "[Character Consistency: keep the SAME character identity as the "
+            "established source portrait — same face, hairstyle, outfit, and equipment.]"
+        )
     if identity_anchors:
         enhanced_prompt = enhanced_prompt + "\n" + "\n".join(identity_anchors)
         print(f"    [*] Injected {len(identity_anchors)} identity anchor(s) into prompt")
 
-    if reference_url:
-        image_url = generate_keyframe(enhanced_prompt,
-                                      reference_image_url=reference_url,
-                                      ref_strength=ref_strength)
-    else:
-        image_url = generate_keyframe(enhanced_prompt)
+    try:
+        if reference_url:
+            image_url = generate_keyframe(enhanced_prompt,
+                                          reference_image_url=reference_url,
+                                          ref_strength=ref_strength)
+        else:
+            image_url = generate_keyframe(enhanced_prompt)
+    except Exception as e:
+        # 生图失败（网络瞬断/接口错误）不再直接 FATAL，改为计入失败计数，
+        # 交由路由节点按 MAX_VIDEO_GEN_FAILURES 决定重试或跳过该镜头。
+        print(f"    ❌ [Art] [Shot {idx+1}] 关键帧生图失败: {e}")
+        scenes[idx]["video_gen_failures"] = scenes[idx].get("video_gen_failures", 0) + 1
+        return {"scenes": scenes}
 
     scenes[idx]["image_url"] = image_url
     scenes[idx]["iterations"] += 1
@@ -1817,9 +2267,26 @@ def reviewer_node(state: MultimediaState):
     if previous_image_url and compute_similarity is not None:
         try:
             similarity_score = compute_similarity(scene["image_url"], previous_image_url)
-            print(f"    [*] embedding 相似度: {similarity_score:.4f}")
+            print(f"    [*] embedding 相似度(相邻镜头): {similarity_score:.4f}")
         except Exception as e:
             print(f"    ⚠️ embedding 计算失败，继续人工审核: {str(e)}")
+
+    # ── 角色一致性闭环度量：与"源头角色肖像"的相似度 ──
+    # 源头肖像是全局角色 ID 基准，用它度量角色漂移比"与上一镜头比"更抗累积误差。
+    portrait_similarity = None
+    portrait_url = state.get("character_portrait_url")
+    if portrait_url and compute_similarity is not None:
+        try:
+            portrait_similarity = compute_similarity(scene["image_url"], portrait_url)
+            print(f"    [*] embedding 相似度(源头肖像): {portrait_similarity:.4f}")
+        except Exception as e:
+            print(f"    ⚠️ 肖像相似度计算失败(不阻断): {str(e)}")
+
+    # 连贯性可观测分数：相邻镜头相似度 + 源头肖像相似度（任一可缺失）
+    continuity_score = {
+        "neighbor_similarity": similarity_score,
+        "portrait_similarity": portrait_similarity,
+    }
 
     # 预注入风格质量标准（evaluate_image 内部会继续 format script）
     style_key = state.get("visual_style") or _DEFAULT_STYLE_KEY
@@ -1836,6 +2303,8 @@ def reviewer_node(state: MultimediaState):
     scenes = state["scenes"].copy()
     scenes[idx]["image_auto_feedback"] = feedback
     scenes[idx]["embedding_similarity"] = similarity_score
+    scenes[idx]["portrait_similarity"] = portrait_similarity
+    scenes[idx]["continuity_score"] = continuity_score
     scenes[idx]["critique"] = feedback
     scenes[idx]["is_perfect"] = _is_review_pass(feedback)
 
@@ -1862,12 +2331,14 @@ def image_review_gate_node(state: MultimediaState):
         "image_url": scene.get("image_url", ""),
         "reference_image_url": previous_image_url,
         "embedding_similarity": scene.get("embedding_similarity"),
+        "portrait_similarity": scene.get("portrait_similarity"),
+        "continuity_score": scene.get("continuity_score"),
         "auto_feedback": scene.get("image_auto_feedback", scene.get("critique", "")),
         "message": "请审核关键帧：可通过、重写，或修改 image_prompt 后继续。",
         "actions":["approve", "rewrite", "edit_prompt"],
     }
 
-    decision = _normalize_decision(interrupt(payload))
+    decision = _normalize_decision(interrupt(payload), gate="image_review")
     action = decision.get("action", "approve")
 
     scenes = state["scenes"].copy()
@@ -1937,10 +2408,19 @@ def end_frame_director_node(state: MultimediaState):
     # ── 环境锚点（防止跨场景环境漂移）──
     environment_anchor = _extract_environment_anchors(global_setting, scene["script"])
 
-    # 风格上下文
-    style_key = state.get("visual_style") or _detect_visual_style(state.get("task", ""))
+    # ── 情节密度字段（Phase 0 结构化输出，强化尾帧可见内容）──
+    action_beat = scene.get("action_beat", "")
+    visual_elements = scene.get("visual_elements", []) or []
+    visual_elements_block = "\n".join(f"- {v}" for v in visual_elements) if visual_elements else "（无额外细节，请从 script 与环境锚点中自行推断具体可见细节）"
+    camera_note = scene.get("camera_note", "")
+    emotion = scene.get("emotion", "")
+    transition_in = scene.get("transition_in", "")
+
+    # 风格上下文（统一从 state 解析）
+    style = _resolve_style(state)
+    style_key = style["style_key"]
     style_context = _build_style_context(style_key)
-    style_suffix = _STYLE_PRESETS.get(style_key, _STYLE_PRESETS[_DEFAULT_STYLE_KEY])["suffix"]
+    style_suffix = style["style_suffix"]
 
     prompt = END_FRAME_DIRECTOR_PROMPT.format(
         global_setting=global_setting,
@@ -1953,14 +2433,22 @@ def end_frame_director_node(state: MultimediaState):
         environment_anchor=environment_anchor,
         style_context=style_context,
         style_suffix=style_suffix,
+        action_beat=action_beat or "（无，请从 script 中提取动作结束状态）",
+        visual_elements_block=visual_elements_block,
+        camera_note=camera_note or "（未指定）",
+        emotion=emotion or "（未指定）",
+        transition_in=transition_in or "（开场镜头，无需承接）",
     )
     last_image_prompt = call_llm(prompt, "导演")
 
     # 安全网：清理序列语言、中文、强制 style suffix
     _preset = _get_style_preset(state)
+    _style_key = _resolve_style(state)["style_key"]
     last_image_prompt = _sanitize_single_frame_prompt(
-        last_image_prompt, _preset["suffix"], _preset.get("strip_keywords", [])
+        last_image_prompt, _preset["suffix"], _get_conflict_keywords(_style_key)
     )
+    # 翻译层：尾帧同样翻译为英文再喂生图模型
+    last_image_prompt = _translate_to_english(last_image_prompt, purpose="image")
 
     scenes = state["scenes"].copy()
     scenes[idx]["last_image_prompt"] = last_image_prompt
@@ -2018,12 +2506,18 @@ def end_frame_gen_node(state: MultimediaState):
     if end_frame_anchors:
         end_frame_prompt = end_frame_prompt + "\n" + "\n".join(end_frame_anchors)
 
-    last_image_url = generate_keyframe(
-        end_frame_prompt,
-        reference_image_url=scene["image_url"],
-        ref_strength=ref_strength,
-        negative_prompt=end_frame_negative,
-    )
+    try:
+        last_image_url = generate_keyframe(
+            end_frame_prompt,
+            reference_image_url=scene["image_url"],
+            ref_strength=ref_strength,
+            negative_prompt=end_frame_negative,
+        )
+    except Exception as e:
+        # 尾帧生图失败不 FATAL，计入失败计数交由路由处理（重试/跳过该镜头）
+        print(f"    ❌ [尾帧] [Shot {idx+1}] 尾帧生图失败: {e}")
+        scenes[idx]["video_gen_failures"] = scenes[idx].get("video_gen_failures", 0) + 1
+        return {"scenes": scenes}
     print(f"    [*] 尾帧参考强度: {ref_strength}（{'极低→大差异' if ref_strength <= 0.12 else '偏低→中等差异' if ref_strength <= 0.2 else '中等→保持连续'}）")
 
     scenes = state["scenes"].copy()
@@ -2048,7 +2542,7 @@ def end_frame_review_gate_node(state: MultimediaState):
         "actions": ["approve", "rewrite", "edit_prompt"],
     }
 
-    decision = _normalize_decision(interrupt(payload))
+    decision = _normalize_decision(interrupt(payload), gate="end_frame_review")
     action = decision.get("action", "approve")
     scenes = state["scenes"].copy()
 
@@ -2229,12 +2723,13 @@ def video_gen_node(state: MultimediaState):
     print(f"--- 🎞️ [镜头 {idx+1}] 动画师生成原片 ---")
 
     scenes = state["scenes"].copy()
-    scenes[idx]["video_iterations"] = scenes[idx].get("video_iterations", 0) + 1
 
     try:
         last_url = scene.get("last_image_url", "") if state.get("use_first_last_frame") else ""
         raw_video_url = generate_video_from_image(scene["image_url"], scene["video_prompt"], last_url)
 
+        # 仅在成功产出后递增质量重试计数（用于审片不通过时的重生循环上限）
+        scenes[idx]["video_iterations"] = scenes[idx].get("video_iterations", 0) + 1
         scenes[idx]["raw_video_url"] = raw_video_url
         scenes[idx]["final_video_url"] = raw_video_url
         scenes[idx]["video_is_perfect"] = False
@@ -2243,6 +2738,7 @@ def video_gen_node(state: MultimediaState):
         return {"scenes": scenes, "aborted": False, "abort_reason": None}
 
     except FreeTierQuotaExhaustedError as e:
+        # 配额/余额耗尽：所有模型均不可用，属于全局性中止，不再继续后续镜头
         msg = str(e)
         print(f"    ⛔ [配额中止] {msg}")
         scenes[idx]["raw_video_url"] = ""
@@ -2257,16 +2753,43 @@ def video_gen_node(state: MultimediaState):
         }
 
     except Exception as e:
+        # 单镜头生成失败（网络/超时/接口错误）：不中止整个任务，
+        # 由路由决定"有限次重试后跳过该镜头"，保全已生成的其他镜头。
         msg = f"视频生成失败: {str(e)}"
-        print(f"    ⛔ [视频中止] {msg}")
-        scenes[idx]["raw_video_url"] = ""
-        scenes[idx]["final_video_url"] = ""
+        fails = scenes[idx].get("video_gen_failures", 0) + 1
+        scenes[idx]["video_gen_failures"] = fails
         scenes[idx]["video_is_perfect"] = False
         scenes[idx]["video_critique"] = "FAIL: " + msg
+
+        if fails >= MAX_VIDEO_GEN_FAILURES:
+            # 达重试上限 -> 占位黑场降级（而非静默丢镜头）：
+            # 生成本地黑场写入 final_video_url 槽位，标记 shot_failed，
+            # 保证 stitcher/audio_mixer 拿到时间轴完整的序列。
+            duration = float(scene.get("duration", 2.0) or 2.0)
+            placeholder = _make_placeholder_clip(
+                duration=duration,
+                idx=idx,  # 按镜头索引命名，避免多镜头覆盖
+            )
+            if placeholder:
+                scenes[idx]["final_video_url"] = placeholder
+                scenes[idx]["raw_video_url"] = placeholder
+                scenes[idx]["shot_failed"] = True
+                print(f"    ⚫ [降级] 镜头 {idx+1} 达失败上限，生成占位黑场: {placeholder}")
+            else:
+                # moviepy 不可用时退化为原空 URL 跳过
+                scenes[idx]["final_video_url"] = ""
+                scenes[idx]["raw_video_url"] = ""
+                scenes[idx]["shot_failed"] = True
+                print(f"    ⚠️ [降级] 镜头 {idx+1} 达失败上限，占位生成失败，跳过该镜头")
+        else:
+            scenes[idx]["raw_video_url"] = ""
+            scenes[idx]["final_video_url"] = ""
+
+        print(f"    ⚠️ [镜头 {idx+1} 生成失败 {fails}/{MAX_VIDEO_GEN_FAILURES}] {msg}")
         return {
             "scenes": scenes,
-            "aborted": True,
-            "abort_reason": msg,
+            "aborted": False,
+            "abort_reason": None,
             "error_log": msg,
         }
 
@@ -2310,6 +2833,13 @@ def video_review_gate_node(state: MultimediaState):
         prev_scene = state["scenes"][idx - 1]
         previous_image_url = prev_scene.get("last_image_url") or prev_scene.get("image_url")
 
+    # ── 动作幅度自检：防止"静止空镜 / 看不出在动" ──
+    action_beat = scene.get("action_beat", "")
+    if len(action_beat.strip()) < 8:
+        motion_hint = "⚠️ 动作空洞：本镜头缺少明确的可见动作（action_beat 过短），建议重写时补充主体从起始到结束的具体动作，否则视频模型易生成静止空镜。"
+    else:
+        motion_hint = f"✓ 已锚定可见动作：{action_beat[:60]}..."
+
     payload = {
         "stage": "video_review",
         "title": f"镜头 {idx + 1} 视频审片",
@@ -2321,11 +2851,13 @@ def video_review_gate_node(state: MultimediaState):
         "reference_image_url": previous_image_url,
         "embedding_similarity": scene.get("embedding_similarity"),
         "auto_feedback": scene.get("video_auto_feedback", scene.get("video_critique", "")),
-        "message": "请审核视频成片：可通过、重写，或修改 video_prompt 后再生成。",
+        "action_beat": action_beat,
+        "motion_hint": motion_hint,
+        "message": "请审核视频成片：可通过、重写，或修改 video_prompt 后再生成。注意检查主体是否有可见动作、画面是否看得出在演什么。",
         "actions": ["approve", "rewrite", "edit_prompt"],
     }
 
-    decision = _normalize_decision(interrupt(payload))
+    decision = _normalize_decision(interrupt(payload), gate="video_review")
     action = decision.get("action", "approve")
 
     scenes = state["scenes"].copy()
@@ -2348,77 +2880,172 @@ def _extract_character_identity(state: MultimediaState) -> dict:
     """
     从已完成场景中提取角色身份锚点，供下一场景保持角色外观一致性。
 
-    提取来源：
-    1. shot_plan.focus_object — 镜头焦点对象（如"剑客"、"dragon"）
-    2. scene script — 外观描述关键词（发型、服饰、装备等）
+    提取来源（优先级从高到低，避免对人类职业名词的硬编码假设）：
+    1. reference_sheets.characters — 已生成的角色键（如 ugly_duckling / white_swan），
+       由 reference_gen 用 LLM 从故事提取，最权威，直接用作 subject。
+    2. 上一轮已累积的 character_identity — 历史 subject 源头锁定（抗漂移）。
+    3. shot_plan.focus_object — 镜头焦点对象（过滤纯环境词）。
+    4. scene script + global_setting + 角色参考描述 — 抽取通用中性外观词
+       （体型 / 颜色 / 羽色 / 自然附肢等），不再局限于人类发型服饰。
+
+    抗漂移设计（源头累积，取代链式覆盖）：
+    - appearance 与历史特征取并集，单调递增：某个场景剧本未提及的特征
+      不会从锚点链中消失，避免约束被逐级稀释。
+    - subject 源头优先：一旦确立便不再被后续场景改写，防止角色身份跳变。
 
     Returns:
         {
             "subject": str,          # 角色主体标识
-            "appearance": List[str], # 外观特征关键词
+            "appearance": List[str], # 外观特征关键词（累积并集）
             "has_character": bool,   # 是否检测到角色存在
         }
     """
     scene = state["scenes"][state["current_scene_index"]]
     script = scene.get("script", "")
     shot_plan = state.get("shot_plan")
+
+    # 源头基准：全局角色设定始终参与匹配，不随场景剧本措辞而丢失
+    global_setting = state.get("global_setting", "") or ""
+    # 历史累积：上一轮已提取的角色身份锚点
+    prev_identity = (state.get("scene_anchors") or {}).get("character_identity") or {}
+
+    # 匹配文本：当前场景剧本（优先），全局设定单独保留作为兜底来源
     script_lower = script.lower()
+    global_lower = global_setting.lower()
 
     identity = {"subject": "", "appearance": [], "has_character": False}
 
-    # ── 1. 从 shot_plan 获取焦点对象 ──
-    if shot_plan:
-        focus = shot_plan.get("focus_object", "")
-        if focus:
+    # 防御跨运行 thread 残留污染：第一个镜头没有任何「前序」可言，
+    # 必须忽略任何继承自历史 scene_anchors 的 character_identity（如旧运行残留的 mage），
+    # 强制基于本次 reference_sheets + 剧本重新识别。
+    is_first_scene = state.get("current_scene_index", 0) == 0
+    if is_first_scene:
+        prev_identity = {}
+
+    # ── 1.5 从 reference_sheets 已生成的角色键匹配（最高优先级，最权威）──
+    # 说明：历史累积的 subject 不再前置强制覆盖，而是作为本步匹配失败时的
+    # 兜底（见下方「0.5 历史继承 fallback」），避免旧锚点（如 mage）污染首镜头。
+    # reference_gen 已用 LLM 从 global_setting+scenes 提取正确角色名
+    # （如 ugly_duckling / white_swan），直接用剧本提及的角色键作 subject，
+    # 彻底避免对人类职业名词的硬编码假设（修复「丑小鸭被锁成法师」的 bug）。
+    reference_sheets = state.get("reference_sheets") or {}
+    char_entries = reference_sheets.get("characters", {}) or {}
+    matched_char_key = ""
+    matched_char_desc = ""
+    if char_entries:
+        # 角色名候选（英文键 + 中文名）
+        def _names_of(char_key, char_data):
+            ns = [char_key]
+            if isinstance(char_data, dict):
+                cn = char_data.get("name_cn", "")
+                if cn:
+                    ns.append(cn)
+            return ns, (char_data.get("description", "") if isinstance(char_data, dict) else "")
+
+        # 第一轮：仅用「当前场景剧本」匹配 —— 保证按当前镜头区分角色，
+        # 不被 global_setting 里罗列的全片角色名抢先（修复「丑小鸭永远抢先」）。
+        for char_key, char_data in char_entries.items():
+            names, desc = _names_of(char_key, char_data)
+            for n in names:
+                if n and n.lower() in script_lower:
+                    matched_char_key = char_key
+                    matched_char_desc = desc
+                    break
+            if matched_char_key:
+                break
+
+        # 第二轮（兜底）：剧本未提及任何角色时，退回 global_setting 全片角色名匹配
+        if not matched_char_key:
+            for char_key, char_data in char_entries.items():
+                names, desc = _names_of(char_key, char_data)
+                for n in names:
+                    if n and n.lower() in global_lower:
+                        matched_char_key = char_key
+                        matched_char_desc = desc
+                        break
+                if matched_char_key:
+                    break
+
+        # 若仍无命中，但全片只有一个角色，则默认采用它
+        if not matched_char_key and len(char_entries) == 1:
+            matched_char_key = next(iter(char_entries.keys()))
+            only = char_entries[matched_char_key]
+            matched_char_desc = only.get("description", "") if isinstance(only, dict) else ""
+
+    if matched_char_key:
+        # 优先采用本轮基于剧本匹配的 reference_sheets 角色键，
+        # 覆盖任何历史残留（如 mage），确保角色身份始终由当前 reference 决定。
+        identity["subject"] = matched_char_key
+        identity["has_character"] = True
+
+    # ── 0.5 历史继承 fallback：仅当本轮 reference_sheets 完全没匹配到角色时，
+    # 才继承上一个镜头的 subject（抗漂移），避免旧 mage 锚点在首镜头被强制覆盖。
+    if not identity["subject"]:
+        prev_subject = prev_identity.get("subject", "")
+        if prev_subject:
+            identity["subject"] = prev_subject
+            identity["has_character"] = True
+
+    # ── 1. 兜底：shot_plan.focus_object 作为 subject（仅在仍为空时，过滤纯环境词）──
+    # 优先级低于 reference_sheets 角色键，避免 focus_object 误写覆盖权威角色名。
+    if shot_plan and not identity["subject"]:
+        focus = (shot_plan.get("focus_object", "") or "").strip()
+        _ENV_NOISE = {"environment", "landscape", "scene", "background",
+                      "农场", "湖泊", "沼泽", "森林", "天空", "环境", "场景"}
+        if focus and focus.lower() not in _ENV_NOISE:
             identity["subject"] = focus
             identity["has_character"] = True
 
-    # ── 2. 从剧本提取外观描述关键词 ──
-    # 发型/面容
-    _APPEARANCE_PATTERNS = {
-        "hair": [
-            "长发", "短发", "白发", "黑发", "金发", "红发", "银发",
-            "long hair", "short hair", "white hair", "black hair",
-            "blonde", "red hair", "silver hair", "ponytail", "braid",
-        ],
-        "clothing": [
-            "铠甲", "盔甲", "长袍", "斗篷", "风衣", "战甲", "披风", "盔甲",
-            "armor", "cloak", "robe", "coat", "cape", "vest", "suit",
-            "leather", "chainmail", "hooded",
-        ],
-        "equipment": [
-            "剑", "刀", "弓", "枪", "盾", "法杖", "权杖", "双刃",
-            "sword", "blade", "bow", "staff", "shield", "spear", "wand",
-            "katana", "scythe", "halberd",
-        ],
-        "feature": [
-            "伤疤", "纹身", "面具", "眼罩", "角", "翅膀", "机械臂",
-            "scar", "tattoo", "mask", "eyepatch", "horns", "wings",
-            "cybernetic", "mechanical arm", "glowing eyes",
-        ],
-    }
+    # ── 2. 从剧本 + 全局设定 + 角色参考描述 提取外观描述关键词（通用、中性）──
+    # 不再硬编码「人类发型/服饰/装备」表，而是对动物/精灵/机甲等各类主角通用：
+    # 抽取自然界与角色设定中常见的外观维度词（羽毛/体型/颜色/翅膀/角等），
+    # 作为补充锚点注入 prompt，而非覆盖式强制锁定。
+    _NEUTRAL_APPEARANCE_TOKENS = [
+        # 体型 / 体态
+        "蓬乱", "蓬松", "纤细", "壮硕", "修长", "粗短", "圆润", "瘦削",
+        "slender", "bulky", "lean", "fluffy", "plump",
+        # 颜色 / 毛色 / 羽色
+        "灰褐", "灰白", "纯白", "雪白", "乌黑", "金黄", "银灰", "棕褐",
+        "white", "black", "gray", "grey", "brown", "golden", "silver",
+        # 羽毛 / 皮毛 / 鳞片等自然覆盖物
+        "羽毛", "绒毛", "鳞甲", "皮毛", "鬃毛", "feathers", "fur", "scales",
+        # 自然附肢 / 特征（不再视为畸形）
+        "翅膀", "双翅", "长颈", "短颈", "犄角", "尖喙", "利爪",
+        "wings", "beak", "claws", "horns", "tail", "fins",
+        # 神态 / 气质
+        "怯弱", "优雅", "威严", "俏皮", "哀伤", "gentle", "elegant", "fierce",
+    ]
 
-    for category, keywords in _APPEARANCE_PATTERNS.items():
-        for kw in keywords:
-            if kw.lower() in script_lower:
-                identity["appearance"].append(kw)
+    # 匹配文本扩展：纳入已匹配角色的描述（角色设定里的外观词也应被抽取）
+    match_text = script_lower
+    if matched_char_desc:
+        match_text += " " + matched_char_desc.lower()
 
-    # 如果检测到外观关键词但没有 subject，从剧本中提取角色名词
-    if identity["appearance"] and not identity["subject"]:
-        # 常见角色名词模式
-        _CHARACTER_NOUNS = [
-            "剑客", "战士", "骑士", "英雄", "法师", "刺客", "猎人",
-            "女巫", "武士", "忍者", "将军", "女王", "王子", "公主",
-            "warrior", "knight", "hero", "mage", "assassin", "hunter",
-            "witch", "samurai", "ninja", "general", "queen", "prince",
-        ]
-        for noun in _CHARACTER_NOUNS:
-            if noun.lower() in script_lower:
-                identity["subject"] = noun
-                identity["has_character"] = True
-                break
+    for tok in _NEUTRAL_APPEARANCE_TOKENS:
+        if tok.lower() in match_text:
+            identity["appearance"].append(tok)
 
-    if identity["appearance"]:
+    # ── 2.5 与历史累积特征求并集（去重保序，单调递增，抗漂移）──
+    # 先放历史特征保持源头顺序，再补充本场景新增特征。
+    merged_appearance: List[str] = []
+    seen_kw = set()
+    for kw in list(prev_identity.get("appearance") or []) + identity["appearance"]:
+        kw_key = kw.lower()
+        if kw_key not in seen_kw:
+            merged_appearance.append(kw)
+            seen_kw.add(kw_key)
+    identity["appearance"] = merged_appearance
+
+    # 兜底：focus_object 作为 subject（仅在仍为空时，过滤纯环境词）
+    if shot_plan and not identity["subject"]:
+        focus = (shot_plan.get("focus_object", "") or "").strip()
+        _ENV_NOISE = {"environment", "landscape", "scene", "background",
+                      "农场", "湖泊", "沼泽", "森林", "天空", "环境", "场景"}
+        if focus and focus.lower() not in _ENV_NOISE:
+            identity["subject"] = focus
+            identity["has_character"] = True
+
+    if identity["appearance"] or identity["subject"]:
         identity["has_character"] = True
 
     return identity
@@ -2522,6 +3149,8 @@ def advance_scene_node(state: MultimediaState):
 def abort_node(state: MultimediaState):
     reason = state.get("abort_reason") or state.get("error_log") or "未知原因"
     print(f"\n--- ⛔ [任务中止] {reason}")
+    # 运行指标埋点：任务中止（可观测性）
+    run_metrics.finalize_run("abort", "")
     return {"error_log": reason, "aborted": True, "abort_reason": reason}
 
 
@@ -2539,45 +3168,168 @@ def stitcher_node(state: MultimediaState):
 
     if not video_urls:
         print("    ❌ 所有镜头均无可用视频，无法生成最终宣传片")
+        # 运行指标埋点：拼接失败（可观测性）
+        run_metrics.finalize_run("fail", "")
         return {"final_movie_path": "", "error_log": "所有镜头视频生成失败，无法拼接"}
 
     if skipped:
         print(f"    [*] 将拼接 {len(video_urls)}/{len(state['scenes'])} 个镜头（跳过: {skipped}）")
 
-    # ── 提取转场数据 ──
+    # ── 提取转场数据（基于各场景的叙事功能 beat，做跨场景语义衔接）──
+    # 说明：state["sequence_graph"] 是「单个场景内部」的镜头关系图，不能直接当作
+    # 跨场景转场使用（否则会错用最后一个场景的内部转场）。正确做法是根据每个
+    # 场景的 beat + emotion，用 select_cross_scene_transition 计算相邻场景的转场。
     transitions: List[str] = []
-    seq_graph = state.get("sequence_graph")
-    if seq_graph and seq_graph.get("connections"):
-        transitions = [
-            c.get("transition", "hard_cut")
-            for c in seq_graph["connections"]
-        ]
-        non_hardcut = [t for t in transitions if t in ("dissolve", "fade_through_black",
-                                                        "whip_pan", "smash_cut", "camera_carry")]
-        if non_hardcut:
-            print(f"    [*] 序列转场: {len(non_hardcut)} 个效果转场将从 sequence_graph 应用")
+    used_scenes = [s for s in state["scenes"] if s.get("final_video_url")]
+    for i in range(1, len(used_scenes)):
+        prev = used_scenes[i - 1]
+        curr = used_scenes[i]
+        t = select_cross_scene_transition(
+            prev_beat=prev.get("beat", ""),
+            curr_beat=curr.get("beat", ""),
+            prev_emotion=prev.get("emotion", ""),
+            curr_emotion=curr.get("emotion", ""),
+        )
+        transitions.append(t)
+        print(f"    ↳ 场景 {i}→{i+1} 转场: {t} "
+              f"(beat: {prev.get('beat','?')} → {curr.get('beat','?')})")
+    non_hardcut = [t for t in transitions if t in ("dissolve", "fade_through_black",
+                                                    "whip_pan", "smash_cut", "camera_carry")]
+    if non_hardcut:
+        print(f"    [*] 跨场景转场: {len(non_hardcut)} 个效果转场（基于叙事节拍语义匹配）")
 
     # ── 动态文件名 ──
     task = state.get("task", "")
     output_filename = ""  # 空字符串让 stitch_videos 自动生成
 
     try:
-        final_movie_path = stitch_videos(
+        final_movie_path, valid_indices, segment_durations = stitch_videos(
             video_urls,
             output_filename=output_filename,
             transitions=transitions,
         )
-        return {"final_movie_path": final_movie_path}
+        # P1 字幕精确对齐：把各有效片段真实时长写回对应 scene，
+        # 供 audio_mixer_node 的 build_srt 按真实时长逐句对齐（替代原均分策略）。
+        scenes_patch = {}
+        for orig_idx, dur in zip(valid_indices, segment_durations):
+            if 0 <= orig_idx < len(state["scenes"]):
+                state["scenes"][orig_idx]["video_duration"] = round(float(dur), 3)
+        return {
+            "final_movie_path": final_movie_path,
+            "segment_durations": segment_durations,
+        }
     except Exception as e:
         print(f"    ❌ 拼接失败: {e}")
         return {"final_movie_path": "", "error_log": f"视频拼接失败: {str(e)[:200]}"}
+
+
+def audio_mixer_node(state: MultimediaState):
+    """P0/P1 音频闭环：在无声成片之上叠加配音 + 字幕 + BGM + 混音。
+
+    复用现成组件：edge-tts(TTS) / pysrt(SRT) / 预置曲库 BGM / moviepy(烧录+混音)。
+    - enable_audio=False 时整阶段跳过（前端总开关）。
+    - 若无声成片缺失则直接跳过，保证图不崩。
+    """
+    # 总开关：前端可关闭整个音频闭环
+    if not state.get("enable_audio", True):
+        print("\n--- 🔊 [音频师] 音频闭环已关闭（前端开关），跳过 ---")
+        return {}
+
+    final_movie = state.get("final_movie_path") or ""
+    if not final_movie or not os.path.exists(final_movie):
+        print("\n--- 🔊 [音频师] 无成片，跳过音频合成 ---")
+        return {}
+
+    print("\n--- 🔊 [音频师] 正在为成片叠加配音、字幕与配乐 ---")
+    voice_role = state.get("voice_role") or "xiaoxiao"
+
+    # 1) 汇总分镜台词作为旁白文本
+    narration = "\n".join(
+        s.get("script", "").strip() for s in state["scenes"] if s.get("script", "").strip()
+    )
+    if not narration:
+        print("    [*] 无旁白文本，仅保留原声（若有）")
+        return {}
+
+    # 2) TTS 配音（edge-tts，失败降级 dashscope CosyVoice）
+    voiceover = generate_voiceover(narration, voice=voice_role)
+    if not voiceover:
+        print("    ⚠️ 配音生成失败，跳过音频合成")
+        return {}
+
+    # 3) 生成 SRT 字幕（P1 精确对齐：build_srt 读取 scene["video_duration"] 真实时长）
+    srt_path = build_srt(state["scenes"])
+    print(f"    ✓ 配音: {os.path.basename(voiceover)} | 字幕: {os.path.basename(srt_path)}")
+
+    # 4) 生成 BGM：P1 按场景情绪映射 mood（复用 scenes 的 emotion 字段），
+    #    未提供时回退顶层 bgm_mood 或 ambient。
+    scenes_with_emotion = [s for s in state["scenes"] if s.get("emotion")]
+    bgm_mood = resolve_bgm_mood(
+        scenes_with_emotion[0].get("emotion") if scenes_with_emotion else None,
+        fallback=state.get("bgm_mood") or "ambient",
+    )
+    bgm_path = generate_bgm(bgm_mood, duration=30.0)
+    if bgm_path:
+        print(f"    ✓ BGM: {os.path.basename(bgm_path)}")
+    else:
+        print("    [*] 未生成 BGM（无可用引擎），跳过配乐")
+
+    # 5) 烧录字幕 → 混音成片（配音 + 可选 BGM）
+    try:
+        with_subs = burn_subtitles(final_movie, srt_path)
+        final_with_audio = mix_audio(with_subs, voiceover, bgm_path=bgm_path)
+        print(f"    ✓ 音画合成完成: {os.path.basename(final_with_audio)}")
+        # 运行指标埋点：任务成功出片（可观测性）
+        run_metrics.finalize_run("ok", final_with_audio)
+        return {
+            "audio_track": voiceover,
+            "subtitle_path": srt_path,
+            "bgm_path": bgm_path,
+            "final_movie_with_audio": final_with_audio,
+        }
+    except Exception as e:
+        print(f"    ❌ 音频合成失败: {e}")
+        return {"error_log": f"音频合成失败: {str(e)[:200]}"}
 
 
 # ================= 路由逻辑 =================
 def decide_image_quality(state: MultimediaState):
     idx = state["current_scene_index"]
     scene = state["scenes"][idx]
-    if scene["is_perfect"] or scene["iterations"] >= 3:
+
+    passed = scene["is_perfect"]
+
+    # ── 角色一致性闭环门槛 ──
+    # 即便 VLM 判 PASS，若与源头角色肖像的相似度过低（角色漂移）且仍有重试配额，
+    # 也强制重生一次。embedding 缺失时该分支自动跳过（优雅降级为纯 VLM 判定）。
+    # 阈值随机位自适应：背对镜头/远景时脸部信息本就缺失，
+    # 沿用正面基准会系统性误判，重生也无法提分（白耗额度）。
+    threshold, relax_reason = get_consistency_threshold(
+        CHARACTER_CONSISTENCY_THRESHOLD, scene.get("script", "")
+    )
+    portrait_sim = scene.get("portrait_similarity")
+    if (
+        passed
+        and threshold > 0
+        and portrait_sim is not None
+        and portrait_sim < threshold
+        and scene["iterations"] < 3
+    ):
+        note = f"，已按 {relax_reason} 放宽" if relax_reason else ""
+        print(
+            f"    ⚠️ [镜头 {idx+1}] 角色一致性不足 "
+            f"(肖像相似度 {portrait_sim:.3f} < {threshold:.3f}{note})，触发重生"
+        )
+        run_metrics.record_portrait_regen(portrait_sim, threshold)
+        return "director"
+
+    if relax_reason and portrait_sim is not None:
+        print(
+            f"    ℹ️ [镜头 {idx+1}] 一致性阈值按 {relax_reason} 放宽至 "
+            f"{threshold:.3f}（肖像相似度 {portrait_sim:.3f}），通过"
+        )
+
+    if passed or scene["iterations"] >= 3:
         if state.get("use_first_last_frame"):
             return "end_frame_director"
         return "videographer"
@@ -2591,9 +3343,61 @@ def decide_end_frame_quality(state: MultimediaState):
     return "end_frame_director"
 
 def decide_after_video_generation(state: MultimediaState):
+    # 配额耗尽属于全局中止
     if state.get("aborted"):
         return "abort"
-    return "video_reviewer"
+
+    idx = state["current_scene_index"]
+    scene = state["scenes"][idx]
+
+    # 生成成功 → 进入审片
+    if scene.get("raw_video_url"):
+        return "video_reviewer"
+
+    # 单镜头生成失败：未达上限则重试生成，达到上限则跳过该镜头继续后续
+    if scene.get("video_gen_failures", 0) < MAX_VIDEO_GEN_FAILURES:
+        print(f"    🔁 [镜头 {idx+1}] 生成失败，重试...")
+        return "retry"
+
+    print(f"    ⏭️ [镜头 {idx+1}] 生成失败达上限，跳过该镜头继续制作其余镜头")
+    return "skip"
+
+def decide_after_image_generation(state: MultimediaState):
+    """关键帧生图后路由：成功→审核；失败按 video_gen_failures 重试或跳过该镜头（不 FATAL）。"""
+    # 配额耗尽属于全局中止
+    if state.get("aborted"):
+        return "abort"
+
+    idx = state["current_scene_index"]
+    scene = state["scenes"][idx]
+
+    if scene.get("image_url"):
+        return "reviewer"
+
+    if scene.get("video_gen_failures", 0) < MAX_VIDEO_GEN_FAILURES:
+        print(f"    🔁 [镜头 {idx+1}] 关键帧生图失败，重试...")
+        return "retry"
+    print(f"    ⏭️ [镜头 {idx+1}] 关键帧生图失败达上限，跳过该镜头继续制作其余镜头")
+    return "skip"
+
+
+def decide_after_end_frame_generation(state: MultimediaState):
+    """尾帧生图后路由：成功→尾帧审核；失败按 video_gen_failures 重试或跳过。"""
+    if state.get("aborted"):
+        return "abort"
+
+    idx = state["current_scene_index"]
+    scene = state["scenes"][idx]
+
+    if scene.get("last_image_url"):
+        return "end_frame_review"
+
+    if scene.get("video_gen_failures", 0) < MAX_VIDEO_GEN_FAILURES:
+        print(f"    🔁 [镜头 {idx+1}] 尾帧生图失败，重试...")
+        return "retry"
+    print(f"    ⏭️ [镜头 {idx+1}] 尾帧生图失败达上限，跳过该镜头继续制作其余镜头")
+    return "skip"
+
 
 def decide_video_quality(state: MultimediaState):
     idx = state["current_scene_index"]
@@ -2618,17 +3422,21 @@ def decide_after_critic(state: MultimediaState):
 
     if not critic_eval:
         print("\n🔄 [路由] 无评估结果，直接进导演")
+        run_metrics.record_critic(0.0, False, rewrite_count, False)
         return "director"
 
     if critic_eval.get("pass_gates", False):
         print(f"\n✅ [路由] 质量门控通过 (score={critic_eval['overall_score']:.2f})，进入导演")
+        run_metrics.record_critic(critic_eval["overall_score"], True, rewrite_count, False)
         return "director"
 
     if rewrite_count >= max_rewrites:
         print(f"\n⚠️ [路由] 已达最大重写次数 ({max_rewrites})，强制进入导演")
+        run_metrics.record_critic(critic_eval["overall_score"], False, rewrite_count, True)
         return "director"
 
     print(f"\n🔄 [路由] 质量门控未通过 (score={critic_eval['overall_score']:.2f})，触发重写 #{rewrite_count + 1}")
+    run_metrics.record_critic(critic_eval["overall_score"], False, rewrite_count, False)
     return "rewrite"
 
 
@@ -2668,6 +3476,7 @@ workflow.add_node("video_review", video_review_gate_node)
 workflow.add_node("advance_scene", advance_scene_node)
 workflow.add_node("abort", abort_node)
 workflow.add_node("stitcher", stitcher_node)
+workflow.add_node("audio_mixer", audio_mixer_node)
 
 workflow.set_entry_point("showrunner")
 workflow.add_edge("showrunner", "showrunner_review")
@@ -2709,7 +3518,16 @@ workflow.add_conditional_edges(
     }
 )
 
-workflow.add_edge("image_generator", "reviewer")
+workflow.add_conditional_edges(
+    "image_generator",
+    decide_after_image_generation,
+    {
+        "reviewer": "reviewer",
+        "retry": "image_generator",
+        "skip": "advance_scene",
+        "abort": "abort",
+    }
+)
 workflow.add_edge("reviewer", "image_review")
 
 workflow.add_conditional_edges(
@@ -2744,7 +3562,16 @@ workflow.add_conditional_edges(
     }
 )
 
-workflow.add_edge("end_frame_generator", "end_frame_review")
+workflow.add_conditional_edges(
+    "end_frame_generator",
+    decide_after_end_frame_generation,
+    {
+        "end_frame_review": "end_frame_review",
+        "retry": "end_frame_generator",
+        "skip": "advance_scene",
+        "abort": "abort",
+    }
+)
 workflow.add_conditional_edges(
     "end_frame_review",
     decide_end_frame_quality,
@@ -2760,6 +3587,8 @@ workflow.add_conditional_edges(
     decide_after_video_generation,
     {
         "video_reviewer": "video_reviewer",
+        "retry": "video_generator",
+        "skip": "advance_scene",
         "abort": "abort"
     }
 )
@@ -2784,9 +3613,24 @@ workflow.add_conditional_edges(
 )
 
 workflow.add_edge("abort", END)
-workflow.add_edge("stitcher", END)
+workflow.add_edge("stitcher", "audio_mixer")
+workflow.add_edge("audio_mixer", END)
 
-multimedia_agent = workflow.compile(checkpointer=checkpointer)
+# LangGraph API（langgraph dev / cloud）由平台自动接管持久化，不允许自定义
+# checkpointer，否则启动时直接 GraphLoadError。本地脚本/测试则保留自定义
+# SqliteSaver 以获得读写并发健壮性。通过 LANGGRAPH_API 环境变量区分。
+import os as _os
+
+# LangGraph API（langgraph dev / cloud）由平台自动接管持久化，不允许自定义
+# checkpointer，否则启动时直接 GraphLoadError。本地脚本/测试则保留自定义
+# SqliteSaver 以获得读写并发健壮性。
+# 通过 .env 中的 LANGGRAPH_API_MODE=1 显式声明运行在 LangGraph API 模式下。
+_RUNNING_UNDER_LANGGRAPH_API = bool(_os.getenv("LANGGRAPH_API_MODE"))
+
+if _RUNNING_UNDER_LANGGRAPH_API:
+    multimedia_agent = workflow.compile()
+else:
+    multimedia_agent = workflow.compile(checkpointer=checkpointer)
 
 
 def get_thread_state(thread_id: str):

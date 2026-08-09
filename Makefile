@@ -1,4 +1,4 @@
-.PHONY: all format lint test tests test_watch integration_tests docker_tests help extended_tests
+.PHONY: all format lint test tests test_watch integration_tests docker_tests help extended_tests frontend frontend_install frontend_build media_server dev
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -53,6 +53,29 @@ spell_fix:
 	codespell --toml pyproject.toml -w
 
 ######################
+# FRONTEND (React + Vite)
+######################
+
+frontend_install:
+	cd frontend && npm install
+
+frontend_build:
+	cd frontend && npm run build
+
+media_server:
+	python -m src.agent.multimedia.static_server
+
+# 一键启动：LangGraph Server + 媒体服务 + 前端 dev（各进程独立运行）
+dev:
+	@echo '[dev] 启动 LangGraph Server (:2024) ...'
+	start "langgraph" cmd /c "langgraph dev"
+	@echo '[dev] 启动媒体静态服务 (:8900) ...'
+	start "media" cmd /c "python -m src.agent.multimedia.static_server"
+	@echo '[dev] 启动前端 dev server (:5173) ...'
+	start "frontend" cmd /c "cd frontend && npm run dev"
+	@echo '[dev] 已启动三个独立窗口，分别关闭即可停止。'
+
+######################
 # HELP
 ######################
 
@@ -64,4 +87,9 @@ help:
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
 	@echo 'test_watch                   - run unit tests in watch mode'
+	@echo '----'
+	@echo 'frontend_install             - install frontend deps (npm install in frontend/)'
+	@echo 'frontend_build               - build frontend production bundle (npm run build)'
+	@echo 'media_server                 - start FastAPI media server on :8900'
+	@echo 'dev                          - start LangGraph Server + media server + frontend dev'
 

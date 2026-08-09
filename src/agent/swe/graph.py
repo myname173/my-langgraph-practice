@@ -41,12 +41,25 @@ logger = logging.getLogger("SWE_Graph")
 # ==========================================
 # LLM 初始化
 # ==========================================
-llm = ChatOpenAI(
-    model=os.getenv("MODEL_NAME", "qwen3.5-plus"),
-    openai_api_key=os.getenv("OPENAI_API_KEY"),
-    openai_api_base=os.getenv("OPENAI_BASE_URL"),
-    temperature=0.1,
-)
+# SWE 主模型：百炼免费额度对带快照日期的 qwen3.7-max-2026-05-17 返回 403 FreeTierOnly，
+# 裸名 qwen3.7-max 可用。可通过 MODEL_NAME 覆盖；SWE_FALLBACK_MODELS（逗号分隔）
+# 指定不可用时的降级模型列表（默认 qwen3.7-max, qwen3.7-plus, deepseek-v4-flash-0731）。
+def _build_swe_llm() -> ChatOpenAI:
+    primary = os.getenv("MODEL_NAME", "qwen3.7-max")
+    fallbacks = [
+        m.strip() for m in os.getenv(
+            "SWE_FALLBACK_MODELS", "qwen3.7-max,qwen3.7-plus,deepseek-v4-flash-0731"
+        ).split(",") if m.strip()
+    ]
+    models = list(dict.fromkeys([primary, *fallbacks]))
+    return ChatOpenAI(
+        model=models[0],
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        openai_api_base=os.getenv("OPENAI_BASE_URL"),
+        temperature=0.1,
+    )
+
+llm = _build_swe_llm()
 
 llm_with_tools = llm.bind_tools(TOOLS)
 

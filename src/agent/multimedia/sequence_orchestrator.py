@@ -90,16 +90,16 @@ def _compute_emotion_transition(src_emotion: str, tgt_emotion: str) -> str:
     abs_delta = abs(delta)
 
     # 大正向跳跃：安静→爆发
-    if delta >= 0.35:
+    if delta >= _ENERGY_JUMP_LARGE:
         return "smash_cut"
     # 大负向跌落：高潮→沉寂
-    if delta <= -0.35:
+    if delta <= -_ENERGY_JUMP_LARGE:
         return "fade_through_black"
     # 中等正向攀升
-    if 0.2 <= delta < 0.35:
+    if _ENERGY_JUMP_MEDIUM <= delta < _ENERGY_JUMP_LARGE:
         return "hard_cut"
     # 中等负向衰退
-    if -0.35 < delta <= -0.2:
+    if -_ENERGY_JUMP_LARGE < delta <= -_ENERGY_JUMP_MEDIUM:
         return "dissolve"
 
     # 小变化（|delta| < 0.2）：按能量区间选择
@@ -109,6 +109,65 @@ def _compute_emotion_transition(src_emotion: str, tgt_emotion: str) -> str:
     if avg_energy >= 0.45:
         return "match_cut"      # 中能量区视觉韵律
     return "camera_carry"       # 低能量区无缝衔接
+
+# ── 基于叙事功能（beat）的跨场景转场路由 ──
+# 借鉴 STAGE / HoloCine 的"镜头间语义衔接"思想：转场类型不只是看情绪能量，
+# 更要看上一个镜头的叙事功能与下一个镜头的功能之间的"承接关系"。
+# 例：climax → resolution 表示高潮落幕，应用柔和的 dissolve / fade；
+#     develop → turn 表示平稳到转折，用 hard_cut 制造冲击；
+#     setup → inciting 表示建立到触发事件，用 camera_carry 保持沉浸。
+_BEAT_TRANSITIONS: Dict[tuple, str] = {
+    # (prev_beat, curr_beat) -> transition
+    ("climax", "resolution"): "dissolve",
+    ("climax", "fallout"): "fade_through_black",
+    ("turn", "climax"): "smash_cut",
+    ("turn", "resolution"): "dissolve",
+    ("develop", "turn"): "hard_cut",
+    ("develop", "climax"): "smash_cut",
+    ("inciting", "develop"): "hard_cut",
+    ("setup", "inciting"): "camera_carry",
+    ("setup", "develop"): "camera_carry",
+    ("fallout", "resolution"): "dissolve",
+    ("resolution", "setup"): "fade_through_black",  # 环形/新篇章
+}
+# 与 beat 对应的情绪能量（用于无 emotion 时的兜底）
+_BEAT_ENERGY: Dict[str, float] = {
+    "setup": 0.4, "inciting": 0.55, "develop": 0.6,
+    "turn": 0.8, "climax": 0.95, "fallout": 0.7, "resolution": 0.5,
+}
+
+
+def select_cross_scene_transition(
+    prev_beat: str,
+    curr_beat: str,
+    prev_emotion: str = "",
+    curr_emotion: str = "",
+) -> str:
+    """
+    为两个相邻场景（跨场景拼接）选择转场类型。
+
+    优先级：
+        1. 命中 _BEAT_TRANSITIONS 语义路由（叙事功能承接）— 保证情节连贯的剪辑逻辑；
+        2. 否则回退到情绪能量差算法 _compute_emotion_transition（与场景内转场保持一致）；
+        3. 兜底 hard_cut。
+
+    Returns:
+        转场类型字符串（见 _TRANSITION_LIBRARY）。
+    """
+    pb = (prev_beat or "").strip().lower()
+    cb = (curr_beat or "").strip().lower()
+
+    # 1. 语义路由优先
+    if (pb, cb) in _BEAT_TRANSITIONS:
+        return _BEAT_TRANSITIONS[(pb, cb)]
+
+    # 2. 回退到情绪能量差（兼容 beat 缺失场景）
+    src_e = _BEAT_ENERGY.get(pb) or _EMOTION_ENERGY.get(prev_emotion, 0.5)
+    tgt_e = _BEAT_ENERGY.get(cb) or _EMOTION_ENERGY.get(curr_emotion, 0.5)
+    src_emotion = prev_emotion or ("intensity" if src_e >= 0.7 else "presence")
+    tgt_emotion = curr_emotion or ("intensity" if tgt_e >= 0.7 else "presence")
+    return _compute_emotion_transition(src_emotion, tgt_emotion)
+
 
 # 基于 shot type 变化的转场修饰
 _SHOT_TYPE_TRANSITIONS: Dict[tuple, str] = {
@@ -128,19 +187,39 @@ def _select_transition(
     target_shot: Dict,
 ) -> str:
     """
-    根据两个相邻 shot 的情绪和镜头类型，选择最佳转场方式。
+    根据两个相邻 shot 的运镜矢量、情绪和镜头类型，选择最佳转场方式。
 
     优先级：
-    1. 情绪能量差值计算（覆盖所有 225 种情绪对）
-    2. 镜头类型匹配（当情绪无法区分时的修饰）
-    3. 默认 hard_cut（兜底）
+    1. 运镜矢量匹配（同向连续运动 → camera_carry 无缝承接）
+    2. 情绪能量差值计算（覆盖所有 225 种情绪对）
+    3. 镜头类型匹配（当情绪无法区分时的修饰）
+    4. 默认 hard_cut（兜底）
     """
     src_emotion = source_shot.get("emotion", "")
     tgt_emotion = target_shot.get("emotion", "")
     src_type = source_shot.get("camera", {}).get("type", "")
     tgt_type = target_shot.get("camera", {}).get("type", "")
 
-    # 1. 情绪能量差值计算
+    # ── 1. 运镜矢量匹配（Motion Vector Matching）──
+    # 复用 _extract_motion_direction，让已有的运镜数据参与转场决策：
+    # 同向连续运动时用 camera_carry 做真正的"运动承接"，比单纯叠化更自然；
+    # 运动方向剧烈反转时明确避免 camera_carry（叠化会显得别扭），改用硬切。
+    src_move = source_shot.get("camera", {}).get("movement", "")
+    tgt_move = target_shot.get("camera", {}).get("movement", "")
+    src_dir = _extract_motion_direction(src_move)
+    tgt_dir = _extract_motion_direction(tgt_move)
+
+    _REVERSAL_PAIRS = {("inward", "outward"), ("outward", "inward")}
+
+    if src_dir != "unknown" and tgt_dir != "unknown":
+        # 同向且均为真实运动（非静止）→ 运动矢量对齐，无缝承接
+        if src_dir == tgt_dir and src_dir != "static":
+            return "camera_carry"
+        # 方向反转 → 禁用 camera_carry，用硬切表达明确的方向变化
+        if (src_dir, tgt_dir) in _REVERSAL_PAIRS:
+            return "hard_cut"
+
+    # 2. 情绪能量差值计算
     if src_emotion and tgt_emotion:
         return _compute_emotion_transition(src_emotion, tgt_emotion)
 
@@ -306,28 +385,20 @@ def _compute_spatial_continuity(
 # ============================================================
 
 # 情绪的"能量级别"映射（用于计算情绪变化方向和强度）
-_EMOTION_ENERGY: Dict[str, float] = {
-    "awe": 0.6,
-    "grandeur": 0.65,
-    "mystery": 0.4,
-    "insignificance": 0.35,
-    "anticipation": 0.5,
-    "presence": 0.6,
-    "intimacy": 0.55,
-    "power": 0.75,
-    "vulnerability": 0.45,
-    "isolation": 0.3,
-    "tenderness": 0.5,
-    "loss": 0.35,
-    "adrenaline": 0.85,
-    "intensity": 0.9,
-    "triumph": 0.8,
-    # ── dialogue / montage / reveal 新增情绪 ──
-    "connection": 0.55,     # 对话场景的人际温暖感
-    "tension": 0.65,        # 对话/对峙中的紧张积蓄
-    "progression": 0.55,    # 蒙太奇中的递进推进感
-    "wonder": 0.6,          # 揭示场景的惊叹/发现感
+# 改从 visual_rules.json 读取（配置化、可调参），保留内置默认兜底保证缺失配置时行为不变。
+from .config_loader import emotion_energy_table, transition_threshold
+
+_EMOTION_ENERGY: Dict[str, float] = dict(emotion_energy_table("default")) or {
+    "awe": 0.6, "grandeur": 0.65, "mystery": 0.4, "insignificance": 0.35,
+    "anticipation": 0.5, "presence": 0.6, "intimacy": 0.55, "power": 0.75,
+    "vulnerability": 0.45, "isolation": 0.3, "tenderness": 0.5, "loss": 0.35,
+    "adrenaline": 0.85, "intensity": 0.9, "triumph": 0.8,
+    "connection": 0.55, "tension": 0.65, "progression": 0.55, "wonder": 0.6,
 }
+# 转场能量跳变阈值（从 visual_rules.json 读取，保持默认 0.35/0.2 与原有逻辑一致）
+_TR = transition_threshold()
+_ENERGY_JUMP_LARGE = _TR.get("energy_jump_large", 0.4)
+_ENERGY_JUMP_MEDIUM = _TR.get("energy_jump_small", 0.15)
 
 
 def _compute_emotional_delta(

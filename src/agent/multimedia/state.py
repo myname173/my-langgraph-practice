@@ -12,14 +12,31 @@ class MultimediaState(TypedDict):
     current_scene_index: int
     final_movie_path: Optional[str]
     error_log: Optional[str]
+
+    # ── P0 音频闭环（配音 + 字幕 + 混音）──
+    audio_track: Optional[str]               # 配音音频本地路径 (.mp3)
+    subtitle_path: Optional[str]             # 生成的 SRT 字幕路径
+    bgm_path: Optional[str]                  # 背景音乐路径（P1 接入）
+    final_movie_with_audio: Optional[str]    # 音画合成后的最终成片
+    voice_role: Optional[str]                # 配音音色 key（见 tts.EDGE_TTS_VOICES_ZH）
+    enable_audio: Optional[bool]             # 音频闭环总开关（前端控制，默认开启）
+    bgm_mood: Optional[str]                  # BGM 情绪标签（如 ambient/tense/upbeat）
     
     # 新增：是否启用首尾帧双控模式
     use_first_last_frame: bool
 
     # 视觉风格（Style Registry）
-    # 由 _detect_visual_style 从用户 task 中检测，存储 _STYLE_PRESETS 的 key
-    # 供 director / end_frame_director / sanitize 等节点消费
+    # 由 _extract_visual_style（LLM 抽取）从用户输入中识别，存储 _STYLE_PRESETS 的 key，
+    # 或 "custom:<label>" 表示未知但由 LLM 给出英文风格描述的自定义风格。
+    # 供 director / end_frame_director / sanitize 等节点消费。
     visual_style: Optional[str]
+
+    # 风格英文描述（由 _extract_visual_style 产出），供导演/审核 prompt 注入
+    style_description: Optional[str]
+
+    # 风格英文后缀（由 _extract_visual_style 产出，命中预设时取预设后缀，
+    # 自定义时取 LLM 给出的 style_prompt），全链路生图/视频统一追加
+    style_suffix: Optional[str]
 
     # 内容类型（Content Type Registry）
     # 由 _detect_content_type 从用户 task 中检测，存储 _CONTENT_TYPE_PRESETS 的 key
@@ -47,6 +64,11 @@ class MultimediaState(TypedDict):
     # Phase 5: Multi-Agent Film Studio System
     # 由 film_studio 节点生成，包含多 Agent 协作优化的结果
     studio_output: Optional[Dict[str, Any]]
+    # studio_output 落盘指针：为缓解大 state 死锁，完整 studio 结果落本地文件，
+    # state 仅存路径（轻量指针）。film_studio_node 返回时剥离大对象。
+    studio_output_path: Optional[str]
+    # studio 结果摘要（共识度/修改数/冲突数），供下游观测，避免携带大对象。
+    studio_summary: Optional[Dict[str, Any]]
 
     # Phase RAG: Knowledge Retrieval Layer
     # 由 visual_context_builder 节点中的 RAG 检索生成，供 director 消费

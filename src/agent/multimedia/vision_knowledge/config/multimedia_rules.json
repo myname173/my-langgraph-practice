@@ -1,0 +1,49 @@
+{
+  "emotion_energy": {
+    "awe": 0.6, "grandeur": 0.65, "mystery": 0.4, "insignificance": 0.35,
+    "anticipation": 0.5, "presence": 0.6, "intimacy": 0.55, "power": 0.75,
+    "vulnerability": 0.45, "isolation": 0.3, "tenderness": 0.5, "loss": 0.35,
+    "adrenaline": 0.85, "intensity": 0.9, "triumph": 0.8,
+    "connection": 0.55, "tension": 0.65, "progression": 0.55, "wonder": 0.6,
+    "hope": 0.45, "neutral": 0.3
+  },
+  "emotion_energy_editor": {
+    "anticipation": 0.4, "adrenaline": 0.8, "intensity": 0.9, "triumph": 0.7,
+    "awe": 0.5, "grandeur": 0.6, "insignificance": 0.3, "mystery": 0.35,
+    "presence": 0.5, "intimacy": 0.4, "power": 0.75, "vulnerability": 0.25,
+    "tenderness": 0.3, "isolation": 0.2, "hope": 0.45, "loss": 0.15,
+    "neutral": 0.3
+  },
+  "acceptable_arcs": ["crescendo", "arc", "anti_crescendo", "wave", "sustained"],
+  "anti_crescendo_relax_phases": ["opening"],
+  "focus_patterns": {
+    "character": [
+      "剑客", "战士", "骑士", "英雄", "角色", "主角",
+      "身影", "面容", "眼神", "双眼", "脸庞",
+      "hero", "warrior", "character", "figure", "knight",
+      "eyes", "face", "silhouette", "protagonist"
+    ],
+    "vehicle": [
+      "战马", "战车", "飞船", "机甲", "巨龙",
+      "steed", "ship", "mech", "dragon", "vehicle", "machine"
+    ],
+    "weapon": [
+      "剑", "枪", "弓", "刃", "锤", "盾",
+      "sword", "gun", "blade", "weapon", "bow", "shield"
+    ],
+    "creature": [
+      "龙", "兽", "怪物", "巨", "精灵", "恶魔",
+      "dragon", "beast", "monster", "creature", "demon", "spirit"
+    ],
+    "environment": [
+      "城堡", "城市", "天空", "山脉", "森林", "海洋",
+      "废墟", "荒原", "都市", "星空", "天际",
+      "castle", "city", "sky", "mountain", "forest", "ocean",
+      "ruins", "landscape", "horizon", "storm", "thunder"
+    ]
+  },
+  "transition_threshold": {
+    "energy_jump_large": 0.35,
+    "energy_jump_small": 0.2
+  }
+}

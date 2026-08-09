@@ -1,0 +1,14 @@
+{
+  "character_consistency_threshold": 0.5,
+  "max_rewrites": 2,
+  "max_video_gen_failures": 2,
+  "quality_score": {
+    "excellent": 0.8,
+    "pass": 0.6,
+    "fail": 0.15
+  },
+  "critic_rewrite_coefficient": 0.7,
+  "critic_crescendo_weight": 1.0,
+  "critic_arc_penalty": 0.5,
+  "critic_energy_weight": 0.3
+}

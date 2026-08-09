@@ -58,7 +58,11 @@ _HERO_POS_PREF = _shot_config["hero_position_preference"]
 # 3. 焦点对象提取（规则驱动，从 script 中提取视觉焦点）
 # ============================================================
 
-_FOCUS_PATTERNS: Dict[str, List[str]] = {
+# 焦点对象白名单（从 visual_rules.json 读取，配置化、可热改）
+# 保留内置默认兜底，保证配置文件缺失时行为不变。
+from .config_loader import focus_patterns
+
+_FOCUS_PATTERNS: Dict[str, List[str]] = focus_patterns() or {
     "character": [
         "剑客", "战士", "骑士", "英雄", "角色", "主角",
         "身影", "面容", "眼神", "双眼", "脸庞",
@@ -87,7 +91,16 @@ _FOCUS_PATTERNS: Dict[str, List[str]] = {
 
 
 def _extract_focus(script: str) -> str:
-    """从剧本中提取主要视觉焦点对象，返回实际匹配到的关键词而非类别名。"""
+    """从剧本中提取主要视觉焦点对象，返回实际匹配到的关键词而非类别名。
+
+    兜底策略（规则增强）：当白名单未命中任何关键词时，不再裸回中性 "scene"
+    而丢失用户精心设计的视觉焦点，而是回退到"首句主语 / 最长名词短语"，
+    并标注为 user-specified，确保用户文案中的焦点对象（如"机械信鸽""银链"）
+    在后续分镜/导演流程里不被静默抹除。
+    """
+    if not script:
+        return "scene"
+
     script_lower = script.lower()
     category_scores: Dict[str, int] = {k: 0 for k in _FOCUS_PATTERNS}
     # 记录每个类别中匹配到的关键词及其出现位置（越靠前越重要）
@@ -105,7 +118,132 @@ def _extract_focus(script: str) -> str:
     if category_scores[best_category] > 0:
         # 返回该类别中匹配到的实际关键词
         return category_best_keyword.get(best_category, best_category)
-    return "scene"  # 通用默认值，比 "environment" 更中性
+
+    # 兜底：白名单未命中 -> 保留用户原文焦点（首句主语/最长名词短语），而非 "scene"
+    fallback = _fallback_focus(script)
+    return fallback or "scene"
+
+
+def _fallback_focus(script: str) -> Optional[str]:
+    """白名单未命中时的焦点兜底：抽取首句主语或最长名词短语。
+
+    返回用户原文短语（可能含 user-specified 意图），失败返回 None。
+    """
+    # 取首句（以句号/换行/逗号截断）
+    first_sentence = script.split("。")[0].split("\n")[0].split("，")[0].strip()
+    if not first_sentence:
+        first_sentence = script.strip()
+    # 去标点、取 2-6 字的中文名词短语或英文单词作为焦点
+    import re
+    # 中文：最长连续 2-6 个非标点/非虚词字符
+    cjk = re.findall(r"[一-鿿]{2,6}", first_sentence)
+    if cjk:
+        # 优先选取含"的/之"前的主语，否则取最长短语
+        cjk_sorted = sorted(cjk, key=len, reverse=True)
+        return cjk_sorted[0]
+    # 英文：取最长单词（去除停用词）
+    words = re.findall(r"[A-Za-z]{3,}", first_sentence)
+    stop = {"the", "and", "with", "from", "into", "that", "this", "his", "her"}
+    words = [w for w in words if w.lower() not in stop]
+    if words:
+        return max(words, key=len)
+    return None
+
+
+# ============================================================
+# 角色一致性阈值的机位自适应
+# ============================================================
+# 面部 embedding 相似度天然受机位影响：背对镜头时脸部不可见，
+# 远景时人脸只占画面极小比例，此时用"正面肖像"作基准会系统性偏低。
+# 对这类镜头沿用统一阈值会造成误判——反复重生也无法提分，
+# 白白消耗重试配额与 API 额度。故按机位/景别下调阈值。
+
+# 朝向 → 阈值系数（1.0 表示不打折）
+_ORIENTATION_RELAX = {
+    "back_to_camera": 0.55,   # 完全看不到脸，几乎只能靠服装/发色/色调匹配
+    "over_shoulder":  0.70,   # 过肩镜头通常只露侧后方轮廓
+    "side_profile":   0.80,   # 侧脸，面部特征部分可见
+    "three_quarter":  0.92,   # 四分之三侧，绝大部分特征可见
+    "facing_camera":  1.00,
+}
+
+# 景别 → 阈值系数
+_SHOT_SIZE_RELAX = {
+    "extreme wide shot": 0.60,  # 人物仅占画面很小一块，面部像素极少
+    "wide shot":         0.78,
+    "medium shot":       0.95,
+    "close-up":          1.00,
+    "extreme close-up":  1.00,
+}
+
+# 剧本中"转身离开"一类的动作虽未显式写"背影"，但结果就是背对镜头。
+# 这类隐含语义同样需要放宽，否则最常见的"转身跑开"镜头必然误判。
+_IMPLIED_BACK_PATTERNS = [
+    "转身跑", "转身离", "转身走", "转过身", "背向", "跑开", "跑远", "远去",
+    "离去", "走远", "渐行渐远", "追出去", "冲出去", "奔向远",
+    "turns away", "turns around", "runs away", "walks away", "running away",
+    "walking away", "from behind", "recedes",
+]
+
+
+def infer_shot_orientation(script: str) -> str:
+    """推断镜头中主体相对摄影机的朝向。
+
+    优先使用剧本显式声明的朝向关键词；若无，再根据动作语义推断
+    （如"转身跑开"隐含背对镜头）。无法判断时返回 "unknown"。
+    """
+    if not script:
+        return "unknown"
+    text = script.lower()
+
+    explicit = _extract_camera_overrides(script).get("orientation")
+    if explicit:
+        return explicit
+
+    for pattern in _IMPLIED_BACK_PATTERNS:
+        if pattern in text:
+            return "back_to_camera"
+
+    return "unknown"
+
+
+def get_consistency_threshold(base_threshold: float, script: str) -> tuple:
+    """根据镜头的朝向与景别，计算该镜头适用的角色一致性阈值。
+
+    面部 embedding 在背身/远景镜头下必然偏低，统一阈值会误杀。
+    这里对基准阈值做折减，返回 (阈值, 说明文本)。
+
+    Args:
+        base_threshold: 全局基准阈值
+        script: 该镜头的剧本文本
+
+    Returns:
+        (adjusted_threshold, reason) —— reason 为空字符串表示未调整
+    """
+    if base_threshold <= 0 or not script:
+        return base_threshold, ""
+
+    reasons = []
+    factor = 1.0
+
+    orientation = infer_shot_orientation(script)
+    o_factor = _ORIENTATION_RELAX.get(orientation, 1.0)
+    if o_factor < 1.0:
+        factor *= o_factor
+        reasons.append(f"朝向={orientation}")
+
+    shot_size = _extract_camera_overrides(script).get("type")
+    s_factor = _SHOT_SIZE_RELAX.get(shot_size, 1.0)
+    if s_factor < 1.0:
+        factor *= s_factor
+        reasons.append(f"景别={shot_size}")
+
+    if not reasons:
+        return base_threshold, ""
+
+    # 设下限，避免多重折减后阈值形同虚设（仍需拦住真正的角色崩坏）
+    adjusted = max(base_threshold * factor, 0.22)
+    return adjusted, "、".join(reasons)
 
 
 def _extract_camera_overrides(script: str) -> Dict[str, str]:

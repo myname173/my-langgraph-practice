@@ -115,7 +115,7 @@ def evaluate_image(
 
     try:
         response = client.chat.completions.create(
-            model=os.getenv("DASHSCOPE_VISION_MODEL", "qwen-image-2.0"),
+            model=os.getenv("DASHSCOPE_VISION_MODEL", "qwen-image-3.0-pro"),
             messages=[{"role": "user", "content": content}],
             temperature=0.1,
             max_tokens=512

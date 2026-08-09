@@ -39,8 +39,9 @@ load_dotenv()
 logger = logging.getLogger("SWE_Evolution")
 
 # 演化专用 LLM（temperature 稍高，激发创造力）
+# 与主 SWE 模型共用 MODEL_NAME / SWE_FALLBACK_MODELS 配置，默认 qwen3.7-max。
 _evolution_llm = ChatOpenAI(
-    model=os.getenv("MODEL_NAME", "qwen3.5-plus"),
+    model=os.getenv("MODEL_NAME", "qwen3.7-max"),
     openai_api_key=os.getenv("OPENAI_API_KEY"),
     openai_api_base=os.getenv("OPENAI_BASE_URL"),
     temperature=0.25,

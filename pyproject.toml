@@ -17,6 +17,12 @@ dependencies = [
     "openai>=1.0.0",
     "streamlit>=1.30.0",
     "moviepy>=1.0.3",
+    # P0 音频闭环：配音(TTS) + 字幕(SRT)
+    "edge-tts>=7.0.0",        # GitHub rany2/edge-tts: 微软神经网络 TTS，纯 pip 包零模型下载
+    "pysrt>=1.1.2",          # GitHub byroot/pysrt: SubRip(SRT) 解析/生成，现成库不自己写
+    # 前端产物静态服务（src/agent/multimedia/static_server.py）
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
 ]
 
 

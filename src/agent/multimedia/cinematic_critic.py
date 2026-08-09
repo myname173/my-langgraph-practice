@@ -31,16 +31,19 @@ Cinematic Critic Layer (Phase 4)
 
 from typing import Dict, List, Any, Tuple
 
+from .config_loader import max_rewrites as _cfg_max_rewrites, anti_crescendo_relax_phases
+
 
 # ============================================================
 # 1. 质量阈值常量
 # ============================================================
 
+# max_rewrites 从 thresholds.json 读取（保持默认 2，向后兼容历史调用方）。
 QUALITY_THRESHOLDS = {
     "shot_plan_min": 0.60,       # shot plan 最低通过分
     "sequence_min": 0.55,        # sequence consistency 最低通过分
     "overall_min": 0.70,         # 综合最低通过分（收紧：朝向/光照同质化必须触发重写）
-    "max_rewrites": 2,           # 最大重写次数
+    "max_rewrites": _cfg_max_rewrites(),  # 最大重写次数（配置化：MAX_REWRITES env / thresholds.json）
 }
 
 # Genre-aware 评分权重：不同题材侧重不同维度
@@ -350,6 +353,9 @@ def _check_transition_quality(connections: List[Dict]) -> Tuple[float, List[str]
 
 
 # ── 各内容类型对应的"好"弧形状（模块级，供 _check_arc_shape 和 _gate_trailer_flow 共享）──
+# 注意：anti_crescendo 不预设进 trailer 的可接受集合；仅在 opening 阶段按配置放行
+# （visual_rules.json 的 anti_crescendo_relax_phases），由 _check_arc_shape / _gate_trailer_flow
+# 的阶段化判断实现。这样非 opening 的 anti_crescendo 仍会被门控拦截，保留质量基线。
 _ACCEPTABLE_ARCS: Dict[str, set] = {
     "trailer":      {"crescendo", "arc", "ascent"},
     "commercial":   {"crescendo", "single_peak", "arc"},
@@ -360,19 +366,32 @@ _ACCEPTABLE_ARCS: Dict[str, set] = {
 }
 
 
-def _check_arc_shape(arc: Dict, content_type: str = "trailer") -> Tuple[float, List[str]]:
+def _check_arc_shape(arc: Dict, content_type: str = "trailer", phase: str = "") -> Tuple[float, List[str]]:
     """
     检查情绪曲线形状是否适合当前内容类型。
     trailer/commercial: 需要 crescendo, arc, ascent
     documentary/tutorial: 允许 flat, gentle_undulation, ascending_steps
     music_video: 允许 rhythmic, crescendo
     short_film: 允许 arc, crescendo, gentle_undulation
+
+    anti_crescendo 例外放行：当 shape 为 anti_crescendo 且当前阶段落在
+    visual_rules.json 的 anti_crescendo_relax_phases（默认含 "opening"）时，
+    视为可接受（开场即高潮的叙事在 trailer 语境下合理），仅告警不强制重写。
     """
     issues = []
     shape = arc.get("shape", "unknown")
     direction = arc.get("overall_direction", "unknown")
 
     acceptable = _ACCEPTABLE_ARCS.get(content_type, _ACCEPTABLE_ARCS["trailer"])
+
+    # anti_crescendo 阶段化放宽：opening 阶段按配置放行（不破坏质量基线）
+    relax_phases = anti_crescendo_relax_phases()
+    if shape == "anti_crescendo" and phase in relax_phases:
+        issues.append(
+            f"emotional arc is 'anti_crescendo' at phase '{phase}' — "
+            f"accepted per anti_crescendo_relax_phases (non-blocking)"
+        )
+        return 1.0, issues
 
     if shape in acceptable:
         return 1.0, issues
@@ -491,7 +510,7 @@ def evaluate_cinematic_quality(
 
     # ── Emotion Consistency: 情绪推进 + 弧形状 ──
     emo_progression, emo_issues = _check_emotional_progression(shots)
-    arc_shape, arc_issues = _check_arc_shape(arc, content_type)
+    arc_shape, arc_issues = _check_arc_shape(arc, content_type, arc.get("phase", ""))
     all_issues.extend(emo_issues)
     all_issues.extend(arc_issues)
     if emo_issues:
@@ -623,7 +642,12 @@ def _gate_trailer_flow(
     # 弧形状检查（content_type-aware）
     shape = arc.get("shape", "unknown")
     acceptable = _ACCEPTABLE_ARCS.get(content_type, _ACCEPTABLE_ARCS["trailer"])
-    if shape not in acceptable and shape != "unknown":
+    relax_phases = anti_crescendo_relax_phases()
+    arc_phase = arc.get("phase", "")
+    if shape == "anti_crescendo" and arc_phase in relax_phases:
+        # opening 阶段 anti_crescendo 按配置放行（不阻断 gate）
+        pass
+    elif shape not in acceptable and shape != "unknown":
         issues.append(f"arc shape '{shape}' not ideal for {content_type} (expected: {', '.join(sorted(acceptable))})")
 
     # 转场多样性（trailer/commercial 要求更高）

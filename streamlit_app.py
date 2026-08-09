@@ -661,6 +661,9 @@ def start_new_run() -> None:
         "aborted": False,
         "abort_reason": None,
         "use_first_last_frame": st.session_state.task_use_first_last_frame, # 传入首尾帧开关
+        "enable_audio": st.session_state.task_enable_audio,                 # 音频闭环总开关
+        "bgm_mood": st.session_state.task_bgm_mood,                         # BGM 情绪
+        "voice_role": "xiaoxiao",                                           # 默认配音音色
     }
 
     meta = collect_task_metadata()
@@ -1678,6 +1681,20 @@ def main() -> None:
         st.toggle(
             "启用首尾帧双控生成 (更精准的动作控制，但耗时增加)",
             key="task_use_first_last_frame",
+        )
+
+        # 新增：音频闭环总开关 + BGM 情绪
+        st.toggle(
+            "启用音频闭环 (配音 + 字幕 + 配乐)",
+            value=True,
+            key="task_enable_audio",
+        )
+        st.selectbox(
+            "BGM 情绪",
+            options=["ambient", "tense", "upbeat", "epic", "romantic", "tech"],
+            index=0,
+            key="task_bgm_mood",
+            help="仅当开启音频闭环时生效，用于生成背景配乐",
         )
         
         st.divider()

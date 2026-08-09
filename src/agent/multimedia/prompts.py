@@ -32,20 +32,71 @@ STYLE CONTEXT — 当前项目的视觉风格（必须贯穿所有镜头设计�
    - 铺垫：当前场景应为下一场景创造某种条件或悬念（如"发现远处的威胁"、"武器蓄能完毕"、"门缓缓打开露出光芒"）
    - 禁止生成彼此独立的视觉片段；所有场景必须构成一个有起承转合的完整故事线
 
+【完整故事三幕结构约束 — 必须形成一个真正的"故事"，而非动作片段拼接】
+借鉴影视工业"三幕式（起承转合）+ Save the Cat beat sheet"方法：无论用户给的需求多简略（哪怕只是"女孩挥手""跑向远方"两个孤立动作），你都必须把它扩写成【一个具备完整叙事闭环的短片】，绝不能把零散动作原样输出。一个完整故事必须包含以下戏剧要素（缺一不可）：
+   1) 建置（Setup）：让观众知道「主角是谁、身处何地、TA 想要/在意什么」（用 setup / inciting 镜头承载）。
+   2) 触发（Inciting Incident）：出现一个打破日常的事件/目标/阻碍，推动故事开始（inciting）。
+   3) 对抗/努力（Rising Action）：主角为目标行动、遇到困难或做出选择，情节向前推进（develop，建议 ≥2 镜以积累张力）。
+   4) 转折（Turn）：出现一次意料之外的变化或逆转，把故事推向高潮（turn，必备，禁止缺失）。
+   5) 高潮（Climax）：矛盾集中爆发或目标迎来关键结果，是全片情绪/动作的顶点（climax，必备）。
+   6) 结局（Resolution）：展示事件后的变化/回响/和解，给观众一个收束感（resolution，必备）。
+⚠️ 硬性约束：
+   - 当用户输入只是几个孤立动作（缺少冲突/目标/结局）时，你必须【主动补足中间镜头】把故事讲完整，例如为"女孩挥手→跑向远方"补出"她为何挥手（告别/召唤）、跑向远方是为了什么（赴约/逃离/追梦）、跑到后发生了什么（相遇/回望/抵达）"。
+   - 生成的 scenes 的 beat 序列必须覆盖完整的 ["setup/inciting" → "develop" → "turn" → "climax" → "resolution"] 弧线；禁止出现只有 develop/setup 却没有 turn/climax/resolution 的半成品故事。
+   - 每个 beat 镜头都要服务于整条故事线，禁止插入与主线无关的"漂亮但无意义"的空镜。
+   - 短片镜头数建议 6-9 个（少于 5 个通常无法承载完整三幕）；若用户明确指定镜头数且过短，优先保证故事完整，可在用户指定数附近合理扩展。
+
+【信息密度硬性规则 — 防止镜头内容空洞、看不出东西】这是本次改进的核心：
+每个 scene 必须让观众"一眼能看出在演什么"，禁止输出空洞的静态描述（如"小女孩挥手""一个女孩在花园"）。
+必须对每个 scene 补齐以下信息（缺一不可）：
+   - 主体在镜头内的【可见连续动作】：必须写清动作从什么状态开始、到什么状态结束（例如"她先停下脚步，低头看手中的信，随后缓缓抬头、眼眶泛红地望向远方"——而不是"她很伤心"）。
+   - 【可辨识的环境细节】：至少 3 个具体可见的景物/道具/光影（如"石子小路两侧开满黄色野雏菊、远处有红色邮筒、午后阳光透过梧桐叶投下斑驳光斑"），禁止只写"在花园里/在街上"。
+   - 【镜头内可观察到的变化】：主体姿态、位置或表情在镜头里必须发生改变，否则视频模型只会生成静止空镜。
+
 请输出一个严格的 JSON 对象，包含 "global_setting" 和 "scenes" 两个字段。
+每个 scene 必须是结构化的对象，包含以下字段（全部必填）：
+   - "script": 一句连贯的中文镜头描述（沿用上面的拆镜规则 1-9，忠实于用户原文并补充细节），作为兜底文本。
+   - 【script 纯净度硬性规则】script 只能写【中文叙事内容】（景别+主体动作+环境），绝对禁止在其中混入任何英文风格词、质量词或生图指令后缀，
+     例如 "high-quality"、"anime"、"cinematic"、"4k"、"masterpiece"、"trending on artstation"、"detailed" 等。
+     这些风格化信息由系统统一通过 style_suffix 注入，你擅自写入会与全局风格冲突并污染下游生图提示词。script 必须以中文句号结尾、且不含任何英文字符。
+   - "scale": 景别（如 "extreme wide / wide / medium / close-up / extreme close-up"）。
+   - "camera_note": 镜头运动与角度（如 "slow tracking shot from left to right, low angle"）。
+   - "action_beat": 镜头内主体连续可见动作，必须包含【起始状态 → 结束状态】的可见变化，写具体动词+身体部位+表情，禁止模糊情绪词。
+   - "visual_elements": 数组，列出 3-5 个该镜头可辨识的具体环境/道具/光影细节（英文短语，供生图模型消费）。
+   - "emotion": 该镜头要传递的情绪（如 "joyful / tense / melancholic"）。
+   - "beat": 该镜头在整体情节中的功能，必须是以下之一：
+        "setup"（开场建立角色/世界）、"inciting"（引发事件）、"develop"（推进/发展）、
+        "turn"（转折/逆转）、"climax"（高潮）、"fallout"（余波）、"resolution"（收尾/和解）。
+        一个有张力的短片必须在自有补足的镜头中构成完整三幕弧线：至少包含 1 个 setup/inciting、≥1 个 develop、
+        1 个 turn、1 个 climax、1 个 resolution；禁止所有镜头都是平铺直叙的 "develop/setup"，也禁止缺少 turn 或 resolution 的半成品故事。
+   - "transition_in": 一句中文，描述本镜头开头如何【可见地承接上一镜头的动作/结果】（如"她仍未止住脚步，顺着惯性踉跄了一下"）。
+        第一个镜头写 "（开场，无前置承接）"。这用于保证镜头之间的因果连贯，避免出现互不相关的碎片镜头。
 
 示例格式：
 {{
     "global_setting": "主角是一个留着银色长发、左眼有十字刀疤的男剑客，身穿破旧的黑色皮风衣，手持一把散发着幽蓝光芒的机械巨剑。整体场景风格为赛博朋克与哥特废土结合，常年下着酸雨，色调以暗蓝和霓虹紫为主，充满压抑与史诗感。",
     "scenes":[
-        {{"script": "全景镜头：破败的哥特式城堡前，雷雨交加，男剑客骑着机械战马在泥泞中前行。"}},
-        {{"script": "中景镜头：男剑客翻身下马，拔出背上散发幽蓝光芒的机械巨剑，眼神坚毅。"}},
-        {{"script": "特写镜头：巨剑的蓝光照亮了剑客左眼的十字刀疤，天空中一头机械巨龙呼啸而过。"}},
-        {{"script": "跟随镜头：剑客拖着巨剑冲向大门，准备迎接史诗般的 Boss 战。"}}
+        {{
+            "script": "全景镜头：破败的哥特式城堡前，雷雨交加，男剑客骑着机械战马从远处泥泞小路上缓缓行至城堡大门前勒马停住。",
+            "scale": "extreme wide",
+            "camera_note": "slow aerial pullback revealing the castle",
+            "action_beat": "剑客骑战马从画面远端沿泥泞小路靠近，雨水打湿风衣，至城堡前猛地勒缰，战马前蹄扬起、泥浆飞溅后停稳。",
+            "visual_elements": ["gothic castle with broken spires", "acid rain streaks under blue neon", "muddy puddle reflecting sword glow", "distant lightning", "black mechanical horse"],
+            "emotion": "solemn"
+        }},
+        {{
+            "script": "中景镜头：男剑客翻身下马，拔出背上散发幽蓝光芒的机械巨剑，眼神坚毅地扫视前方。",
+            "scale": "medium",
+            "camera_note": "static frontal shot, slight low angle",
+            "action_beat": "剑客右腿跨过马背落地，左手按鞍、右手反手握柄抽出巨剑，剑身幽蓝光流顺着刃口流转，他抬眼锁定前方目标。",
+            "visual_elements": ["glowing blue mechanical greatsword", "tattered black trench coat", "cross-shaped scar on left eye", "wet cobblestone", "neon purple haze"],
+            "emotion": "determined"
+        }}
     ]
 }}
 
-如果用户只提供了简短模糊的需求描述，你可以发挥创意补充镜头细节。但如果用户已经提供了详细的镜头描述，你必须严格遵循用户原文，不要自行改写或发挥创意。
+如果用户只提供了简短模糊的需求描述，你必须【主动发挥创意】把每个镜头补充到满足"信息密度规则"的程度（可见动作+环境细节+镜头变化），而不是原样保留空洞描述。
+如果用户已经提供了详细的镜头描述，必须严格遵循用户原文，但可在此基础之上补充 visual_elements / action_beat 等细节字段。
 注意：只输出 JSON 对象，不要包含任何 Markdown 标记（如 ```json）或其他废话。注意与当前视觉风格的调性一致，降低破坏相关的词出现。"""
 
 DIRECTOR_SYSTEM_PROMPT = """你是一个专业的执行摄影导演。
@@ -78,6 +129,25 @@ STYLE CONTEXT — 当前项目的视觉风格
 {global_setting}
 
 当前场景的剧本是：{script}
+
+=====================================================
+ACTION BEAT & VISUAL DENSITY — 本镜头必须呈现的可见内容（最高优先级，防止画面空洞）
+=====================================================
+总导演已为该镜头拆解出"镜头内主体连续可见动作"与"可辨识环境细节"，你必须把这些内容【全部转化为英文】融入提示词，
+让生成的画面"一眼能看出在演什么"。
+
+【可见动作 ACTION BEAT】（主体从什么状态开始、到什么状态结束，必须体现在画面中）：
+{action_beat}
+
+【承接上一镜 TRANSITION-IN】（本镜头开头必须可见地延续上一镜的结果，避免出现断裂的碎片镜头）：
+{transition_in}
+
+【可辨识视觉细节 VISUAL ELEMENTS】（该镜头环境/道具/光影，至少逐条融入）：
+{visual_elements_block}
+
+【镜头运动 CAMERA NOTE】：{camera_note}
+【情绪 EMOTION】：{emotion}
+=====================================================
 
 =====================================================
 SHOT STRATEGY — 镜头拍摄方案（你必须精确执行）
@@ -180,6 +250,11 @@ STYLE CONTEXT — 当前项目的视觉风格
 
 【全局视觉设定】：{global_setting}
 【当前场景剧本】：{script}
+【镜头内可见动作 ACTION BEAT（起始→结束，尾帧必须呈现"结束状态"）】：{action_beat}
+【承接上一镜 TRANSITION-IN（本镜开头可见地延续上一镜结果）】：{transition_in}
+【可辨识视觉细节 VISUAL ELEMENTS】：{visual_elements_block}
+【镜头运动 CAMERA NOTE】：{camera_note}
+【情绪 EMOTION】：{emotion}
 【首帧提示词（已生成的开场画面）】：{first_frame_prompt}
 
 =====================================================

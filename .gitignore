@@ -225,3 +225,15 @@ frontend/vite.config.ts.timestamp-*.mjs
 
 # 训练数据本地备份（非核心，勿入库）
 workspace/_training_data/*.bak_*
+
+# ── 运行/调试日志与散落临时文件（不应入库）──
+logs_*.txt
+logs_*.pid
+*.tex
+snap.yaml
+stories_tiny.json
+project_interview_*
+workspace/_*.py
+workspace/_*.txt
+workspace/ck_*.py
+workspace/ck_*_out.txt

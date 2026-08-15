@@ -1,0 +1,551 @@
+2026-08-15T16:16:21.513007Z [info     ] Starting dev persistence flush loop [langgraph_runtime_inmem._persistence] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:16:21.552043Z [info     ] Using langgraph_runtime_inmem  [langgraph_runtime] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:16:21.793563Z [info     ] Using auth of type=noop        [langgraph_api.auth.middleware] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:16:21.859763Z [info     ] Starting In-Memory runtime with langgraph-api=0.12.1 and in-memory runtime=0.32.1 [langgraph_runtime_inmem.lifespan] api_variant=local_dev langgraph_api_version=0.12.1 langgraph_runtime_inmem_version=0.32.1 thread_name=asyncio_0 version=0.12.1
+2026-08-15T16:16:22.299515Z [info     ] Configuring custom checkpointer at ./src/agent/multimedia/checkpointer.py:create_checkpointer
+
+This replaces the default persistence backend.
+Required methods: aget, aget_tuple, aput, aput_writes, alist.
+Recommended methods: adelete_thread, adelete_for_runs, acopy_thread, aprune.
+Missing methods will degrade functionality — see startup logs for details. [langgraph_api._checkpointer._adapter] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=asyncio_0
+2026-08-15T16:16:22.325245Z [info     ] Loading checkpointer ./src/agent/multimedia/checkpointer.py:create_checkpointer [langgraph_api.timing.timer] api_variant=local_dev checkpointer_path=./src/agent/multimedia/checkpointer.py:create_checkpointer elapsed_seconds=0.021600899985060096 langgraph_api_version=0.12.1 name=_load_checkpointer thread_name=asyncio_0
+2026-08-15T16:16:22.333574Z [info     ] Using custom checkpointer: AsyncSqliteSaver [langgraph_api._checkpointer._adapter] api_variant=local_dev kind="<class 'langgraph.checkpoint.sqlite.aio.AsyncSqliteSaver'>" langgraph_api_version=0.12.1 thread_name=asyncio_0
+2026-08-15T16:16:22.337993Z [warning  ] Custom checkpointer missing adelete_for_runs: multitask_strategy='rollback' will not clean up checkpoints from cancelled runs. Thread state may reflect the rolled-back run until a new run completes. [langgraph_api._checkpointer._adapter] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=asyncio_0
+2026-08-15T16:16:22.341313Z [info     ] Custom checkpointer missing acopy_thread: using generic fallback (functional but slower). POST /threads/<id>/copy will re-insert checkpoints one-by-one via aput/aput_writes. [langgraph_api._checkpointer._adapter] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=asyncio_0
+2026-08-15T16:16:22.345196Z [warning  ] Custom checkpointer missing aprune: thread history pruning (keep_latest) is not supported. Old checkpoints will accumulate and storage usage will grow without bound for long-lived threads. [langgraph_api._checkpointer._adapter] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=asyncio_0
+2026-08-15T16:16:22.349487Z [info     ] OTel metrics reporter initialized [langgraph_api.metrics_otlp] api_variant=local_dev backends=['prometheus'] langgraph_api_version=0.12.1 max_emitting_tier=2 metric_prefix=lg_api_ thread_name=MainThread
+2026-08-15T16:16:22.356491Z [info     ] Starting metadata loop         [langgraph_api.metadata] api_variant=local_dev endpoint=https://api.smith.langchain.com/v1/metadata/submit langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:16:22.363481Z [info     ] Getting auth instance: None    [langgraph_api.auth.custom] api_variant=local_dev langgraph_api_version=0.12.1 langgraph_auth=None thread_name=MainThread
+2026-08-15T16:16:22.376010Z [info     ] Starting OTLP metrics collector loop [langgraph_api.metrics_collector] api_variant=local_dev interval_secs=60 langgraph_api_version=0.12.1 thread_name=asyncio_1
+2026-08-15T16:16:22.381804Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:16:26.641537Z [warning  ] C:\Users\13682\Desktop\my-langgraph-practice-main\src\agent\multimedia\graph.py:3906: UserWarning: The 'config' parameter should be typed as 'RunnableConfig' or 'RunnableConfig | None', not 'dict | None'. 
+  workflow.add_node("showrunner_review", showrunner_review_gate_node)
+ [py.warnings] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=asyncio_0
+2026-08-15T16:16:26.645961Z [warning  ] C:\Users\13682\Desktop\my-langgraph-practice-main\src\agent\multimedia\graph.py:3907: UserWarning: The 'config' parameter should be typed as 'RunnableConfig' or 'RunnableConfig | None', not 'dict | None'. 
+  workflow.add_node("reference_gen", reference_gen_node)
+ [py.warnings] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=asyncio_0
+2026-08-15T16:16:26.750453Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:16:26.763150Z [warning  ] Graph import exceeded the expected startup time. Slow initialization (often due to work executed at import time) can delay readiness, slow scale-out velocity, and may cause deployments to be marked unhealthy.
+    To get detailed profiling of slow operations, set FF_PROFILE_IMPORTS=true [langgraph_api.timing.timer] api_variant=local_dev elapsed_seconds=4.406409999995958 graph_id=agent langgraph_api_version=0.12.1 module=src.agent.graph name=_graph_from_spec path=None thread_name=asyncio_0
+2026-08-15T16:16:26.766716Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T16:16:26.796327Z [info     ] Application started up in 6.421s [langgraph_api.timing.timer] api_variant=local_dev elapsed=6.421494900016114 langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:16:26.847204Z [info     ] Starting cron scheduler        [langgraph_api.cron_scheduler] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:16:26.847486Z [info     ] Starting queue with shared loop [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=asyncio_1
+2026-08-15T16:16:26.854743Z [info     ] Starting 1 background workers  [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=asyncio_2
+2026-08-15T16:16:26.859233Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:16:27.301988Z [info     ] Server started in 7.75s        [browser_opener] api_variant=local_dev langgraph_api_version=0.12.1 message='Server started in 7.75s' thread_name='Thread-3 (_open_browser)'
+2026-08-15T16:16:27.306567Z [info     ] 🎨 Opening Studio in your browser... [browser_opener] api_variant=local_dev langgraph_api_version=0.12.1 message='🎨 Opening Studio in your browser...' thread_name='Thread-3 (_open_browser)'
+2026-08-15T16:16:27.311062Z [info     ] URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024&organizationId=01d44f37-c556-4f10-8389-0d8deb201fe0 [browser_opener] api_variant=local_dev langgraph_api_version=0.12.1 message='URL: https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024&organizationId=01d44f37-c556-4f10-8389-0d8deb201fe0' thread_name='Thread-3 (_open_browser)'
+2026-08-15T16:16:27.372502Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=1 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:16:27.372885Z [info     ] Starting background run        [langgraph_api.worker] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 request_id=5face8ca-e87a-4986-a5c0-999535ab36c3 resumable=False run_attempt=1 run_creation_ms=1 run_id=01a00619-9811-7a53-a5ea-a0393007dc1b run_queue_ms=1851610 run_started_at=2026-08-15T16:16:27.372079+00:00 run_stream_start_ms=0 temporary=False thread_id=01a0054b-28de-7572-b075-01b2d2392db5 thread_name=asyncio_2
+
+--- 🔊 [音频师] 正在为成片叠加配音、字幕与配乐 ---
+    ✓ 配音: tts_vifiwa0r.mp3 | 字幕: subs_di0on16l.srt
+    [BGM] mood=tense → _synth_tense.wav
+    ✓ BGM: _synth_tense.wav
+MoviePy - Building video C:\Users\13682\Desktop\my-langgraph-practice-main\output\clips\01a0054b-28de-7572-b075-01b2d2392db5\FINAL_成片_subs.mp4.
+MoviePy - Writing audio in FINAL_成片_subsTEMP_MPY_wvf_snd.mp4
+MoviePy - Done.
+MoviePy - Writing video C:\Users\13682\Desktop\my-langgraph-practice-main\output\clips\01a0054b-28de-7572-b075-01b2d2392db5\FINAL_成片_subs.mp4
+
+2026-08-15T16:17:22.400085Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=1 api_variant=local_dev available=0 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:18:22.447512Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=1 api_variant=local_dev available=0 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:18:54.349158Z [warning  ] C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\moviepy\video\io\ffmpeg_reader.py:190: UserWarning: In file C:\Users\13682\Desktop\my-langgraph-practice-main\output\clips\01a0054b-28de-7572-b075-01b2d2392db5\FINAL_成片.mp4, 6220800 bytes wanted but 0 bytes read at frame index 597 (out of a total 597 frames), at time 24.88/24.88 sec. Using the last valid frame instead.
+  warnings.warn(
+ [py.warnings] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=audio_mixer request_id=5face8ca-e87a-4986-a5c0-999535ab36c3 run_attempt=1 run_id=01a00619-9811-7a53-a5ea-a0393007dc1b thread_id=01a0054b-28de-7572-b075-01b2d2392db5 thread_name=asyncio_2
+MoviePy - Done !
+MoviePy - video ready C:\Users\13682\Desktop\my-langgraph-practice-main\output\clips\01a0054b-28de-7572-b075-01b2d2392db5\FINAL_成片_subs.mp4
+MoviePy - Building video C:\Users\13682\Desktop\my-langgraph-practice-main\output\clips\01a0054b-28de-7572-b075-01b2d2392db5\FINAL_成片_subs_audio.mp4.
+MoviePy - Writing audio in FINAL_成片_subs_audioTEMP_MPY_wvf_snd.mp4
+MoviePy - Done.
+MoviePy - Writing video C:\Users\13682\Desktop\my-langgraph-practice-main\output\clips\01a0054b-28de-7572-b075-01b2d2392db5\FINAL_成片_subs_audio.mp4
+
+2026-08-15T16:19:22.493233Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=1 api_variant=local_dev available=0 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+MoviePy - Done !
+MoviePy - video ready C:\Users\13682\Desktop\my-langgraph-practice-main\output\clips\01a0054b-28de-7572-b075-01b2d2392db5\FINAL_成片_subs_audio.mp4
+    ✓ 音画合成完成: FINAL_成片_subs_audio.mp4
+2026-08-15T16:19:32.284763Z [info     ] Background run succeeded       [langgraph_api.worker] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 request_id=5face8ca-e87a-4986-a5c0-999535ab36c3 run_attempt=1 run_completed_in_ms=2036523 run_created_at=2026-08-15T15:45:35.762025+00:00 run_ended_at=2026-08-15T16:19:32.284054+00:00 run_exec_ms=184911 run_id=01a00619-9811-7a53-a5ea-a0393007dc1b run_started_at=2026-08-15T16:16:27.372079+00:00 run_wait_time_ms=1851610 thread_id=01a0054b-28de-7572-b075-01b2d2392db5 thread_name=asyncio_2
+2026-08-15T16:19:32.303219Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:19:32.311542Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:20:22.524184Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:20:32.514586Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:20:33.030593Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:21:22.550766Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:21:29.341052Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:21:29.347372Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=1 n_runs=1 thread_name=MainThread
+2026-08-15T16:21:32.793712Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:21:33.302636Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:22:22.577922Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:22:33.042379Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:22:33.550979Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:23:22.584692Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:23:33.282627Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:23:33.794262Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:24:22.591232Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:24:33.302418Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:24:33.820831Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:25:22.604637Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:25:33.487074Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:25:34.000111Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:26:22.627417Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:26:31.859845Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:26:31.866748Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T16:26:33.791465Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:26:34.312297Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:27:22.659759Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:27:34.146658Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:27:34.666941Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:28:22.680507Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:28:34.388477Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:28:34.909237Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:29:22.686973Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:29:34.658948Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:29:35.179734Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:30:22.700807Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:30:34.853617Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:30:35.367722Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:31:22.713411Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:31:32.980095Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:31:32.987195Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T16:31:35.139246Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:31:35.666066Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:32:22.734792Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:32:35.386751Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:32:35.908871Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:33:22.749707Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:33:35.583391Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:33:36.120064Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:34:22.776930Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:34:35.802800Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:34:36.324441Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:35:22.796167Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:35:36.067131Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:35:36.587694Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:36:22.816785Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:36:36.350666Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:36:36.872573Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:36:38.508051Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:36:38.522752Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T16:37:22.838022Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:37:36.629167Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:37:37.151094Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:38:22.892435Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:38:37.004046Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:38:37.513579Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:39:22.904167Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:39:37.059946Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:39:37.576594Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:40:22.919188Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:40:37.236503Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:40:37.743592Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:41:22.929742Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:41:37.578225Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:41:38.090163Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:41:39.833760Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:41:39.839118Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T16:42:22.960768Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:42:37.802767Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:42:38.319270Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:43:22.969569Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:43:38.122203Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:43:38.650701Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:44:23.001905Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:44:38.470515Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:44:39.002149Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:45:23.017368Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:45:38.830128Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:45:39.347721Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:46:23.039076Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:46:39.091730Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:46:39.622892Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:46:40.967112Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:46:40.975324Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T16:47:23.049731Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:47:39.363563Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:47:39.896662Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:48:23.059660Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:48:39.715503Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:48:40.239525Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:49:23.086935Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:49:40.039467Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:49:40.574481Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:50:23.109784Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:50:40.400864Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:50:40.913788Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T16:51:23.119544Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:51:40.632307Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:51:41.163855Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:51:42.354918Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:51:42.358732Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T16:52:23.145396Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:52:40.925713Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:52:41.437979Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:53:23.158427Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:53:41.072984Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:53:41.600909Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:54:23.178797Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:54:41.454134Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:54:41.984488Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:55:23.200290Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:55:41.786068Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:55:42.300758Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T16:56:23.223788Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T16:56:42.122879Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:56:42.641670Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:56:43.341858Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T16:56:43.345861Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T16:57:23.234989Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:57:42.347514Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:57:42.879348Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:58:23.262079Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:58:42.606938Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:58:43.138428Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T16:59:23.290812Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T16:59:42.748775Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T16:59:43.266777Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:00:23.301277Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:00:43.106604Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:00:43.629770Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:01:23.323823Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:01:43.321884Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:01:43.843258Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:01:44.408981Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T17:01:44.414676Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T17:02:23.335909Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:02:43.564839Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:02:44.072556Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:03:23.349781Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:03:43.759834Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:03:44.272692Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:04:23.362467Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:04:43.985784Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:04:44.495360Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:05:23.369962Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:05:44.299640Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:05:44.822082Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:06:23.397104Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:06:44.550410Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:06:45.063337Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:06:46.449060Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T17:06:46.454887Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T17:07:23.410170Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:07:44.710344Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:07:45.234504Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:08:23.417917Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:08:45.049794Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:08:45.578023Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:09:23.431578Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:09:45.298800Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:09:45.821001Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:10:23.444167Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:10:45.520515Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:10:46.041090Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:11:23.458450Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:11:45.784004Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:11:46.297932Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:11:48.661643Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T17:11:48.677329Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T17:12:23.480244Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:12:46.082823Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:12:46.603523Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:13:23.506224Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:13:46.367414Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:13:46.880962Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:14:23.527360Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:14:46.529240Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:14:47.054653Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:15:23.546575Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:15:46.755134Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:15:47.268688Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:16:23.561974Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:16:46.970950Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:16:47.498540Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:16:51.885772Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T17:16:51.890473Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T17:17:23.573889Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:17:47.157897Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:17:47.685211Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:18:23.587894Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:18:47.372155Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:18:47.893615Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:19:23.595619Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:19:47.573724Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:19:48.093090Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:20:23.608323Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:20:47.750058Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:20:48.274429Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:21:23.620970Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:21:48.010216Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:21:48.525887Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:21:54.588558Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T17:21:54.595179Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T17:22:23.635642Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:22:48.365129Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:22:48.892073Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:23:23.662996Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:23:48.580042Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:23:49.106852Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:24:23.690500Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:24:48.906939Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:24:49.419660Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:25:23.717508Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:25:49.183855Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:25:49.712165Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:26:20.027649Z [info     ] Created run                    [langgraph_api.models.run] after_seconds=0 api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca checkpoint_id=None if_not_exists=reject langgraph_api_version=0.12.1 method=POST multitask_strategy=enqueue path=/threads/{thread_id}/runs/stream request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_create_ms=6 run_id=01a00675-d279-75d0-b72c-ca245f998239 run_put_ms=0 stream_mode=['values', 'updates'] stream_resumable=False temporary=False thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=MainThread
+2026-08-15T17:26:20.655608Z [info     ] Starting background run        [langgraph_api.worker] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 request_id=5450ce42-2f65-49fd-a9bd-442271225de5 resumable=False run_attempt=1 run_creation_ms=6 run_id=01a00675-d279-75d0-b72c-ca245f998239 run_queue_ms=627 run_started_at=2026-08-15T17:26:20.655121+00:00 run_stream_start_ms=0 temporary=False thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+
+--- 👑[节点1: 总导演] 正在拆解长视频分镜剧本 ---
+2026-08-15T17:26:22.326953Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.7-plus 异常 (PermissionDeniedError)，5s 后重试 (1/2)...
+2026-08-15T17:26:23.737583Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=1 api_variant=local_dev available=0 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:26:27.600506Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.7-plus 异常 (PermissionDeniedError)，5s 后重试 (2/2)...
+2026-08-15T17:26:32.870044Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.7-plus 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:26:33.002194Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.7-max-2026-05-20 异常 (PermissionDeniedError)，5s 后重试 (1/2)...
+2026-08-15T17:26:38.275452Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.7-max-2026-05-20 异常 (PermissionDeniedError)，5s 后重试 (2/2)...
+2026-08-15T17:26:43.547955Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.7-max-2026-05-20 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:26:43.669920Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.8-max 异常 (PermissionDeniedError)，5s 后重试 (1/2)...
+2026-08-15T17:26:48.955892Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.8-max 异常 (PermissionDeniedError)，5s 后重试 (2/2)...
+2026-08-15T17:26:54.215745Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.8-max 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:26:54.333413Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.7-max 异常 (PermissionDeniedError)，5s 后重试 (1/2)...
+2026-08-15T17:26:55.547911Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T17:26:55.555206Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=1 thread_name=MainThread
+2026-08-15T17:26:59.596256Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.7-max 异常 (PermissionDeniedError)，5s 后重试 (2/2)...
+2026-08-15T17:27:04.875675Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 qwen3.7-max 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:27:05.112916Z [info     ] HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 402 Payment Required" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 deepseek-ai/DeepSeek-V3 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:27:05.189767Z [info     ] HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 402 Payment Required" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 Qwen/Qwen2.5-72B-Instruct 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:27:05.258536Z [info     ] HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 402 Payment Required" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 Qwen/Qwen2.5-7B-Instruct 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:27:05.345367Z [info     ] HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 402 Payment Required" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [风格抽取] 模型 THUDM/GLM-4-9B-0414 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+    [风格抽取] LLM 失败，回退关键词检测: 风格抽取 思考失败（所有 fallback 模型均失败）: Error code: 402 - {'code': 30001, 'message': 'Sorry, your account balance is insufficient', 'data': None}
+    [*] 检测到视觉风格: neutral（Neutral）
+    [WARN] 未能从输入识别出明确视觉风格，已用中性兜底（非写实 CG）。 若需指定风格，请在 task / global_setting 中描述（如「水彩」「赛博朋克 CG」）。
+    [*] 检测到内容类型: short_film
+    [WARN] [总导演] 所有 fallback 模型暂不可用，等待 89s 让模型恢复后重试...
+2026-08-15T17:27:23.753435Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=1 api_variant=local_dev available=0 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:28:23.778444Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=1 api_variant=local_dev available=0 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:28:34.233674Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.7-plus 异常 (PermissionDeniedError)，5s 后重试 (1/2)...
+2026-08-15T17:28:39.581724Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.7-plus 异常 (PermissionDeniedError)，5s 后重试 (2/2)...
+2026-08-15T17:28:44.931711Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.7-plus 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:28:45.056155Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.7-max-2026-05-20 异常 (PermissionDeniedError)，5s 后重试 (1/2)...
+2026-08-15T17:28:50.370284Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.7-max-2026-05-20 异常 (PermissionDeniedError)，5s 后重试 (2/2)...
+2026-08-15T17:28:55.754347Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.7-max-2026-05-20 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:28:55.886758Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.8-max 异常 (PermissionDeniedError)，5s 后重试 (1/2)...
+2026-08-15T17:29:01.377939Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.8-max 异常 (PermissionDeniedError)，5s 后重试 (2/2)...
+2026-08-15T17:29:06.699990Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.8-max 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:29:06.837339Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.7-max 异常 (PermissionDeniedError)，5s 后重试 (1/2)...
+2026-08-15T17:29:12.161822Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.7-max 异常 (PermissionDeniedError)，5s 后重试 (2/2)...
+2026-08-15T17:29:17.520135Z [info     ] HTTP Request: POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions "HTTP/1.1 403 Forbidden" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 qwen3.7-max 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:29:17.755315Z [info     ] HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 402 Payment Required" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 deepseek-ai/DeepSeek-V3 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:29:17.834299Z [info     ] HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 402 Payment Required" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 Qwen/Qwen2.5-72B-Instruct 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:29:17.909755Z [info     ] HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 402 Payment Required" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 Qwen/Qwen2.5-7B-Instruct 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:29:17.994508Z [info     ] HTTP Request: POST https://api.siliconflow.cn/v1/chat/completions "HTTP/1.1 402 Payment Required" [httpx] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 langgraph_node=showrunner request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_1
+    [WARN] [总导演] 模型 THUDM/GLM-4-9B-0414 失败并标记为不可用（120s 后恢复），切换下一个 fallback 模型
+2026-08-15T17:29:18.035097Z [warning  ] C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\structlog\stdlib.py:1166: UserWarning: Remove `format_exc_info` from your processor chain if you want pretty exceptions.
+  ed = p(logger, meth_name, ed)  # type: ignore[arg-type]
+ [py.warnings] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=MainThread
+2026-08-15T17:29:18.026835Z [error    ] Run encountered an error in graph: <class 'Exception'>(总导演 思考失败（所有 fallback 模型均失败）: Error code: 402 - {'code': 30001, 'message': 'Sorry, your account balance is insufficient', 'data': None}) [langgraph_api.worker] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_id=01a00675-d279-75d0-b72c-ca245f998239 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=MainThread
+Traceback (most recent call last):
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\worker.py", line 210, in wrap_user_errors
+    await consume(
+        stream, run_id, resumable, stream_modes, thread_id=run["thread_id"]
+    )
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\stream.py", line 659, in consume
+    await _consume_inline(
+    ...<6 lines>...
+    )
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\stream.py", line 725, in _consume_inline
+    raise e
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\stream.py", line 685, in _consume_inline
+    async for mode, payload in stream:
+    ...<18 lines>...
+        )
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\stream.py", line 521, in astream_state
+    event = await wait_if_not_done(anext(stream, sentinel), done)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\asyncio.py", line 110, in wait_if_not_done
+    raise e.exceptions[0] from None
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\pregel\main.py", line 3455, in astream
+    async for _ in runner.atick(
+    ...<16 lines>...
+            yield o
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\pregel\_runner.py", line 396, in atick
+    await arun_with_retry(
+    ...<15 lines>...
+    )
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\pregel\_retry.py", line 744, in arun_with_retry
+    return await task.proc.ainvoke(task.input, config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\_internal\_runnable.py", line 733, in ainvoke
+    input = await asyncio.create_task(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        step.ainvoke(input, config, **kwargs), context=context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\_internal\_runnable.py", line 501, in ainvoke
+    ret = await self.afunc(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langchain_core\runnables\config.py", line 707, in run_in_executor
+    return await asyncio.get_running_loop().run_in_executor(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    )
+    ^
+  File "C:\Python314\Lib\concurrent\futures\thread.py", line 86, in run
+    result = ctx.run(self.task)
+  File "C:\Python314\Lib\concurrent\futures\thread.py", line 73, in run
+    return fn(*args, **kwargs)
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langchain_core\runnables\config.py", line 698, in wrapper
+    return func(*args, **kwargs)
+  File "C:\Users\13682\Desktop\my-langgraph-practice-main\src\agent\multimedia\graph.py", line 834, in showrunner_node
+    response = call_llm(prompt, "总导演", max_tokens=2400)
+               ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\13682\Desktop\my-langgraph-practice-main\src\agent\multimedia\tools\text_llm.py", line 219, in call_llm
+    raise Exception(f"{role_name} 思考失败（所有 fallback 模型均失败）: {str(last_err)}")
+Exception: 总导演 思考失败（所有 fallback 模型均失败）: Error code: 402 - {'code': 30001, 'message': 'Sorry, your account balance is insufficient', 'data': None}
+During task with name 'showrunner' and id 'c68d8738-be50-1979-ef53-a94a184cdcff'
+2026-08-15T17:29:18.051198Z [error    ] Background run failed. Exception: <class 'Exception'>(总导演 思考失败（所有 fallback 模型均失败）: Error code: 402 - {'code': 30001, 'message': 'Sorry, your account balance is insufficient', 'data': None}) [langgraph_api.worker] api_variant=local_dev assistant_id=fe096781-5601-53d2-b2f6-0d3403f7e9ca graph_id=agent langgraph_api_version=0.12.1 request_id=5450ce42-2f65-49fd-a9bd-442271225de5 run_attempt=1 run_completed_in_ms=178029 run_created_at=2026-08-15T17:26:20.027349+00:00 run_ended_at=2026-08-15T17:29:18.050567+00:00 run_exec_ms=177395 run_id=01a00675-d279-75d0-b72c-ca245f998239 run_started_at=2026-08-15T17:26:20.655121+00:00 run_wait_time_ms=627 thread_id=01a00675-d272-76b1-9a31-280ee682c1a0 thread_name=asyncio_2
+Traceback (most recent call last):
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\worker.py", line 272, in worker
+    await asyncio.wait_for(
+    ...<2 lines>...
+    )
+  File "C:\Python314\Lib\asyncio\tasks.py", line 488, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\worker.py", line 210, in wrap_user_errors
+    await consume(
+        stream, run_id, resumable, stream_modes, thread_id=run["thread_id"]
+    )
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\stream.py", line 659, in consume
+    await _consume_inline(
+    ...<6 lines>...
+    )
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\stream.py", line 725, in _consume_inline
+    raise e
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\stream.py", line 685, in _consume_inline
+    async for mode, payload in stream:
+    ...<18 lines>...
+        )
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\stream.py", line 521, in astream_state
+    event = await wait_if_not_done(anext(stream, sentinel), done)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph_api\asyncio.py", line 110, in wait_if_not_done
+    raise e.exceptions[0] from None
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\pregel\main.py", line 3455, in astream
+    async for _ in runner.atick(
+    ...<16 lines>...
+            yield o
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\pregel\_runner.py", line 396, in atick
+    await arun_with_retry(
+    ...<15 lines>...
+    )
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\pregel\_retry.py", line 744, in arun_with_retry
+    return await task.proc.ainvoke(task.input, config)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\_internal\_runnable.py", line 733, in ainvoke
+    input = await asyncio.create_task(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+        step.ainvoke(input, config, **kwargs), context=context
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langgraph\_internal\_runnable.py", line 501, in ainvoke
+    ret = await self.afunc(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langchain_core\runnables\config.py", line 707, in run_in_executor
+    return await asyncio.get_running_loop().run_in_executor(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    )
+    ^
+  File "C:\Python314\Lib\concurrent\futures\thread.py", line 86, in run
+    result = ctx.run(self.task)
+  File "C:\Python314\Lib\concurrent\futures\thread.py", line 73, in run
+    return fn(*args, **kwargs)
+  File "C:\Users\13682\AppData\Roaming\Python\Python314\site-packages\langchain_core\runnables\config.py", line 698, in wrapper
+    return func(*args, **kwargs)
+  File "C:\Users\13682\Desktop\my-langgraph-practice-main\src\agent\multimedia\graph.py", line 834, in showrunner_node
+    response = call_llm(prompt, "总导演", max_tokens=2400)
+               ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\13682\Desktop\my-langgraph-practice-main\src\agent\multimedia\tools\text_llm.py", line 219, in call_llm
+    raise Exception(f"{role_name} 思考失败（所有 fallback 模型均失败）: {str(last_err)}")
+Exception: 总导演 思考失败（所有 fallback 模型均失败）: Error code: 402 - {'code': 30001, 'message': 'Sorry, your account balance is insufficient', 'data': None}
+During task with name 'showrunner' and id 'c68d8738-be50-1979-ef53-a94a184cdcff'
+2026-08-15T17:29:18.072427Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:29:18.078864Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:29:23.785286Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:30:18.320213Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:30:18.840294Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:30:23.793899Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:31:18.507654Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:31:19.035457Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:31:23.812872Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:31:56.536757Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T17:31:56.544296Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T17:32:18.864528Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:32:19.379803Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:32:23.832271Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:33:19.172794Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:33:19.687756Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:33:23.852917Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:34:19.465832Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:34:19.981684Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:34:23.877931Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:35:19.506460Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:35:20.014021Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:35:23.902234Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:36:19.714349Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:36:20.221619Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_2
+2026-08-15T17:36:23.916084Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:36:57.600420Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T17:36:57.614970Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T17:37:19.908261Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:37:20.416043Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:37:23.936698Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:38:20.103171Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:38:20.630024Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:38:23.950394Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:39:20.319687Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:39:20.831568Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:39:23.970546Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:40:20.602530Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:40:21.116215Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:40:23.984198Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:41:20.796389Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2
+2026-08-15T17:41:21.304157Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_1
+2026-08-15T17:41:23.998063Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_0
+2026-08-15T17:41:58.673065Z [info     ] HTTP Request: POST https://api.smith.langchain.com/v1/metadata/submit "HTTP/1.1 204 No Content" [httpx] api_variant=local_dev langgraph_api_version=0.12.1 thread_name=MainThread
+2026-08-15T17:41:58.676799Z [info     ] Successfully submitted metadata to LangSmith instance [langgraph_api.metadata] api_variant=local_dev langgraph_api_version=0.12.1 n_nodes=0 n_runs=0 thread_name=MainThread
+2026-08-15T17:42:21.253044Z [info     ] Worker stats                   [langgraph_runtime_inmem.queue] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_1
+2026-08-15T17:42:21.807632Z [info     ] Queue stats                    [langgraph_runtime_inmem.queue] api_variant=local_dev langgraph_api_version=0.12.1 n_pending=0 n_running=0 pending_runs_wait_time_max_secs=None pending_runs_wait_time_med_secs=None pending_unblocked_runs_wait_time_max_secs=None thread_name=asyncio_0
+2026-08-15T17:42:24.019869Z [info     ] Worker stats                   [langgraph_api.metrics_collector] active=0 api_variant=local_dev available=1 langgraph_api_version=0.12.1 max=1 thread_name=asyncio_2

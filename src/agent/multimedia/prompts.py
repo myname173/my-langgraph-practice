@@ -54,43 +54,40 @@ STYLE CONTEXT — 当前项目的视觉风格（必须贯穿所有镜头设计�
    - 【镜头内可观察到的变化】：主体姿态、位置或表情在镜头里必须发生改变，否则视频模型只会生成静止空镜。
 
 请输出一个严格的 JSON 对象，包含 "global_setting" 和 "scenes" 两个字段。
-每个 scene 必须是结构化的对象，包含以下字段（全部必填）：
-   - "script": 一句连贯的中文镜头描述（沿用上面的拆镜规则 1-9，忠实于用户原文并补充细节），作为兜底文本。
+每个 scene 必须是结构化的对象，核心必填字段如下（其余为可选，省略以节省输出长度、避免截断）：
+   - "script"（必填）: 一句连贯的中文镜头描述（沿用上面的拆镜规则 1-9，忠实于用户原文并补充细节），作为兜底文本。
    - 【script 纯净度硬性规则】script 只能写【中文叙事内容】（景别+主体动作+环境），绝对禁止在其中混入任何英文风格词、质量词或生图指令后缀，
      例如 "high-quality"、"anime"、"cinematic"、"4k"、"masterpiece"、"trending on artstation"、"detailed" 等。
      这些风格化信息由系统统一通过 style_suffix 注入，你擅自写入会与全局风格冲突并污染下游生图提示词。script 必须以中文句号结尾、且不含任何英文字符。
-   - "scale": 景别（如 "extreme wide / wide / medium / close-up / extreme close-up"）。
-   - "camera_note": 镜头运动与角度（如 "slow tracking shot from left to right, low angle"）。
-   - "action_beat": 镜头内主体连续可见动作，必须包含【起始状态 → 结束状态】的可见变化，写具体动词+身体部位+表情，禁止模糊情绪词。
-   - "visual_elements": 数组，列出 3-5 个该镜头可辨识的具体环境/道具/光影细节（英文短语，供生图模型消费）。
-   - "emotion": 该镜头要传递的情绪（如 "joyful / tense / melancholic"）。
-   - "beat": 该镜头在整体情节中的功能，必须是以下之一：
+   - "scale"（必填）: 景别（如 "extreme wide / wide / medium / close-up / extreme close-up"）。
+   - "action_beat"（必填）: 镜头内主体连续可见动作，必须包含【起始状态 → 结束状态】的可见变化，写具体动词+身体部位+表情，禁止模糊情绪词。
+   - "beat"（必填）: 该镜头在整体情节中的功能，必须是以下之一：
         "setup"（开场建立角色/世界）、"inciting"（引发事件）、"develop"（推进/发展）、
         "turn"（转折/逆转）、"climax"（高潮）、"fallout"（余波）、"resolution"（收尾/和解）。
         一个有张力的短片必须在自有补足的镜头中构成完整三幕弧线：至少包含 1 个 setup/inciting、≥1 个 develop、
         1 个 turn、1 个 climax、1 个 resolution；禁止所有镜头都是平铺直叙的 "develop/setup"，也禁止缺少 turn 或 resolution 的半成品故事。
-   - "transition_in": 一句中文，描述本镜头开头如何【可见地承接上一镜头的动作/结果】（如"她仍未止住脚步，顺着惯性踉跄了一下"）。
-        第一个镜头写 "（开场，无前置承接）"。这用于保证镜头之间的因果连贯，避免出现互不相关的碎片镜头。
+   - "camera_note"（可选）: 镜头运动与角度（如 "slow tracking shot from left to right, low angle"）。
+   - "visual_elements"（可选）: 数组，列出 3-5 个该镜头可辨识的具体环境/道具/光影细节（英文短语，供生图模型消费）。
+   - "emotion"（可选）: 该镜头要传递的情绪（如 "joyful / tense / melancholic"）。
+   - "transition_in"（可选）: 一句中文，描述本镜头开头如何【可见地承接上一镜头的动作/结果】；第一个镜头写 "（开场，无前置承接）"。
+⚠️ 输出长度约束：免费模型对单次输出有上限，请【只输出必要字段】以节省 token，不要重复解释、不要写多余字段。
+   只要保证每个 scene 含 script/scale/action_beat/beat 四个必填字段即可，可选字段缺失时系统会自动兜底。
 
-示例格式：
+示例格式（精简，省略可选字段）：
 {{
     "global_setting": "主角是一个留着银色长发、左眼有十字刀疤的男剑客，身穿破旧的黑色皮风衣，手持一把散发着幽蓝光芒的机械巨剑。整体场景风格为赛博朋克与哥特废土结合，常年下着酸雨，色调以暗蓝和霓虹紫为主，充满压抑与史诗感。",
     "scenes":[
         {{
             "script": "全景镜头：破败的哥特式城堡前，雷雨交加，男剑客骑着机械战马从远处泥泞小路上缓缓行至城堡大门前勒马停住。",
             "scale": "extreme wide",
-            "camera_note": "slow aerial pullback revealing the castle",
             "action_beat": "剑客骑战马从画面远端沿泥泞小路靠近，雨水打湿风衣，至城堡前猛地勒缰，战马前蹄扬起、泥浆飞溅后停稳。",
-            "visual_elements": ["gothic castle with broken spires", "acid rain streaks under blue neon", "muddy puddle reflecting sword glow", "distant lightning", "black mechanical horse"],
-            "emotion": "solemn"
+            "beat": "setup"
         }},
         {{
             "script": "中景镜头：男剑客翻身下马，拔出背上散发幽蓝光芒的机械巨剑，眼神坚毅地扫视前方。",
             "scale": "medium",
-            "camera_note": "static frontal shot, slight low angle",
             "action_beat": "剑客右腿跨过马背落地，左手按鞍、右手反手握柄抽出巨剑，剑身幽蓝光流顺着刃口流转，他抬眼锁定前方目标。",
-            "visual_elements": ["glowing blue mechanical greatsword", "tattered black trench coat", "cross-shaped scar on left eye", "wet cobblestone", "neon purple haze"],
-            "emotion": "determined"
+            "beat": "inciting"
         }}
     ]
 }}
@@ -367,31 +364,72 @@ REVIEWER_SYSTEM_PROMPT = """你是一个严苛的资深视觉品质审核总监 
 如果画质、一致性、安全中任何一项不完美，请指出具体缺陷，必须以 "FAIL: " 开头。
 如果画质、一致性、安全都完美，请只返回 "PASS"。"""
 
-VIDEOGRAPHER_PROMPT = """You are a professional cinematographer designing camera motion for a 5-second video clip.
-Observe the keyframe image carefully. The scene script is: "{script}"
+VIDEOGRAPHER_PROMPT = """You are a professional cinematographer designing camera motion for a 5-second image-to-video clip.
+This is a SINGLE-frame (i2v) shot: the model will animate the keyframe image. Your prompt must describe ONLY what MOVES and CHANGES after the frozen first frame — never restate the static picture.
+
+=================================================================
+FIRST-FRAME ANCHOR — the opening frame the video starts from
+=================================================================
+{image_prompt}
+=================================================================
+
+The scene script is: "{script}"
 Previous video review feedback: {critique}
 
-Write an English MOTION PROMPT for the image-to-video model describing what moves and how.
+=================================================================
+GLOBAL SETTING — visual identity that must stay consistent
+=================================================================
+{global_setting}
+=================================================================
 
-You will also receive [Hero Shot Camera Specs] and [Camera Motion Principles] below. Use the camera specs (especially the shot type) to determine the correct framing distance — a wide shot demands a distant, environment-dominant frame while a close-up demands intimate proximity. Do not default to close-range framing for every shot.
+Use the seven-part formula for every output: SUBJECT + ACTION + ENVIRONMENT + CAMERA MOTION + LIGHTING + STYLE + TECHNICAL.
 
-Read the scene script and identify the primary action or visual event. Design the camera movement to follow and react to that action: track the path of a weapon swing, follow the character's gaze, match the speed of a charge, pull back to reveal scope after an impact. Every camera motion should feel motivated by something happening in the frame.
+Write a dense English MOTION PROMPT with these rules:
 
-Describe 2-3 sequential beats within the clip: the opening state, the action peak (where the camera reacts most strongly), and the resulting state. Camera distance may shift within the clip when the action motivates it — pushing in for impact, pulling back for aftermath, rising for reveal.
+1. FIGURE IT ALL MOVES: Start from the first-frame anchor and describe the visible CHANGE it must undergo — what starts moving, what direction, at what speed, and what triggers each motion. One primary camera motion + one clear subject action per beat. Use beats/counts to give the action rhythm (e.g. "the warrior takes three heavy steps forward, plants his boot, then pivots into a backhand swing" — not "he moves quickly").
 
-Include environmental motion (wind, rain, particles, fabric) and expression shifts that support the scene's energy. If a [Previous Scene Context] is provided, let the opening motion acknowledge the previous scene's ending momentum.
+2. CAMERA: Follow/reveal the primary action (track a weapon arc, follow a gaze, match a charge, pull back to reveal scope after impact). Use the shot type to set framing distance — a wide shot demands a distant, environment-dominant frame, a close-up demands intimate proximity. Camera distance may shift when the action motivates it: push in for impact, pull back for aftermath, rise for reveal. Every camera move must have a visible on-screen trigger.
 
-Keep the prompt 80-140 words of dense, natural English. Be specific about direction, speed, and what triggers each camera movement. Avoid vague terms like "cinematic movement."
+3. LIGHTING & COLOR: Keep lighting consistent with the first frame. Anchor the palette with 3-5 concrete color references (e.g. "amber streetlight, wet asphalt blue, neon violet reflections") so the clip keeps tone across motion.
+
+4. PHYSICAL DETAIL OVER ABSTRACTION: Describe concrete, observable physics — "water streams off the blade, embers scatter on impact, rain streaks deflect off the cloak" — never vague phrases like "cinematic movement" or "beautiful scene".
+
+5. ENVIRONMENTAL & EXPRESSION MOTION: Include wind/rain/particles/fabric and subtle expression shifts that support the energy.
+
+6. [Action Beat]: {action_beat}
+   [Visual Elements]: {visual_elements}
+
+Style suffix — the output must end with this exact suffix: "{style_suffix}"
+
+If a [Previous Scene Context] is provided, let the opening motion acknowledge the previous scene's ending momentum.
+
+Keep the prompt 80-140 words of dense, natural English. Be specific about direction, speed, force, and what triggers each movement. Never restate the static frame — only the motion beyond it.
 
 Output ONLY the English motion prompt. No explanations."""
 
-VIDEOGRAPHER_DUAL_FRAME_PROMPT = """You are a professional action choreographer designing character motion for a dual-frame controlled video clip.
-Observe the keyframe image. The scene script is: "{script}"
+VIDEOGRAPHER_DUAL_FRAME_PROMPT = """You are a professional action choreographer designing character motion for a dual-frame (first+last frame controlled) video clip.
+Since both the first and last frames are already fixed, the video model will INTERPOLATE between them. Your job is to describe ONLY the CHARACTER'S BODY MOTION between the two frames — the transition — not camera movement (keep camera mentions brief) and never restate either frame.
+
+=================================================================
+FIRST-FRAME ANCHOR (opening pose / state)
+=================================================================
+{first_frame_prompt}
+=================================================================
+
+=================================================================
+LAST-FRAME ANCHOR (ending pose / state)
+=================================================================
+{last_frame_prompt}
+=================================================================
+
+The scene script is: "{script}"
 Previous video review feedback: {critique}
 
-Write an English MOTION PROMPT for the image-to-video model.
-
-Since first and last frames are both provided, the video model will interpolate between them. Your job is to describe the CHARACTER'S BODY MOTION that happens between the two frames — this is the PRIMARY focus, not camera movement.
+=================================================================
+GLOBAL SETTING — visual identity that must stay consistent
+=================================================================
+{global_setting}
+=================================================================
 
 ╔══════════════════════════════════════════════════╗
 ║  ANTI-STIFFNESS RULE — CRITICAL                  ║
@@ -400,28 +438,35 @@ Since first and last frames are both provided, the video model will interpolate 
 ║  "whips", "shatters", "erupts". Never write      ║
 ║  "slowly moves" or "gently shifts" for action    ║
 ║  scenes. Every motion must have FORCE and        ║
-║  DIRECTION. Describe muscle tension, weight       ║
+║  DIRECTION. Describe muscle tension, weight      ║
 ║  transfer, and momentum.                         ║
 ╚══════════════════════════════════════════════════╝
 
-You will also receive [Hero Shot Camera Specs] below. Use the shot type to calibrate the scale of motion: wide shots show full-body movement arcs and environmental reactions, while close-ups show intimate micro-movement (breath, sweat, fabric tension, pupil dilation).
+Use the seven-part formula for every output: SUBJECT + ACTION + ENVIRONMENT + CAMERA MOTION + LIGHTING + STYLE + TECHNICAL.
 
-PRIMARY — CHARACTER BODY MECHANICS:
-Read the script and identify the primary action. Describe the character's body transition from the first frame's pose to the last frame's pose in vivid detail:
+PRIMARY — CHARACTER BODY MECHANICS (the transition from first-frame pose to last-frame pose):
+- Break the motion into 2-4 clear BEATS with counts, so the model animates with rhythm (e.g. "draws the blade across one full arc in a single beat, plants, then sinks into a low guard" — not "moves into position").
 - Limb trajectories: arm arcs, leg sweeps, torso rotations, head turns
-- Weight transfers: shifting from one foot to another, leaning into a strike, recoiling from impact
-- Momentum and force: fabric streams backward because the character charges forward, debris scatters because a strike lands, a blade traces an arc because the character swings it with full body rotation
-- Combat choreography (when applicable): parry → counter-strike sequences, weapon impact reactions, body dodges
+- Weight transfers: shifting foot-to-foot, leaning into a strike, recoiling from impact
+- Momentum & force: fabric streams backward because the character charges forward; debris scatters because a strike lands; a blade traces an arc because the character swings with full body rotation
+- Combat choreography (when applicable): parry → counter-strike, weapon impact reactions, body dodges
+- For close-ups, describe intimate micro-motion: breath, sweat, fabric tension, pupil dilation. For wide shots, full-body arcs and environmental reactions.
 
 SECONDARY — ENVIRONMENTAL REACTIONS:
-- Hair, fabric, and accessories react to every body movement (cape billows from a pivot, dust rises from a stomp, sparks fly from a clash)
-- Atmospheric particles (rain deflects off the character, embers scatter from impact, leaves swirl in the wake of motion)
+- Hair, fabric, accessories react to every body movement (cape billows on a pivot, dust rises from a stomp, sparks fly from a clash)
+- Atmospheric particles (rain deflects off the character, embers scatter from impact, leaves swirl in the wake)
+- Anchor the palette with 3-5 concrete colors so tone holds across the interpolation.
 
-Camera can gently push in during the action peak or pull back for the aftermath, but keep camera mentions BRIEF — the character's motion is the star.
+PHYSICAL DETAIL OVER ABSTRACTION: describe concrete observable physics — never "cinematic" or "beautiful scene".
+
+[Action Beat]: {action_beat}
+[Visual Elements]: {visual_elements}
+
+Style suffix — the output must end with this exact suffix: "{style_suffix}"
 
 If a [Previous Scene Context] is provided, let the opening motion acknowledge the previous scene's ending momentum.
 
-Keep the prompt 80-130 words of dense, natural English. Be specific about motion paths, forces, and their triggers.
+Keep the prompt 80-130 words of dense, natural English. Be specific about motion paths, forces, and their triggers. Never restate either frame — only the motion between them.
 
 Output ONLY the English motion prompt. No explanations."""
 

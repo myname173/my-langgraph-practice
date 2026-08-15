@@ -6,6 +6,8 @@
 功能：
   - build_srt(scenes, ...): 由分镜台词生成标准 .srt 文件（pysrt）。
   - burn_subtitles(video_path, srt_path): 用 moviepy SubtitlesClip 把字幕烧录进视频。
+       （实现委托给 tools/fonts.py 的 burn_subtitles，统一解决 moviepy 2.x 的
+         TextClip 字体/API 兼容问题。）
 """
 import os
 import tempfile
@@ -13,15 +15,8 @@ from typing import Any, Dict, List, Optional
 
 import pysrt
 
-# moviepy 2.x 移除了 moviepy.editor 聚合入口，做兼容导入
-try:
-    from moviepy.editor import (
-        VideoFileClip, TextClip, CompositeVideoClip,
-    )
-    from moviepy.video.tools.subtitles import SubtitlesClip
-except Exception:
-    from moviepy import VideoFileClip, TextClip, CompositeVideoClip
-    from moviepy.video.tools.subtitles import SubtitlesClip
+# 字幕烧录委托给 fonts.py（moviepy 2.x 兼容：text= 关键字 + 绝对字体路径）
+from .fonts import burn_subtitles as _burn_subtitles
 
 
 def build_srt(
@@ -72,33 +67,14 @@ def burn_subtitles(
     font_size: int = 28,
     out_path: Optional[str] = None,
 ) -> str:
-    """把 SRT 字幕烧录进视频，返回带字幕的视频路径。"""
-    if not os.path.exists(srt_path):
-        return video_path
+    """把 SRT 字幕烧录进视频，返回带字幕的视频路径。
 
-    video = VideoFileClip(video_path)
-    generator = lambda txt: TextClip(
-        txt,
-        font="Microsoft-YaHei",
-        fontsize=font_size,
-        color="white",
-        stroke_color="black",
-        stroke_width=1.2,
-        size=(video.w * 0.9, None),
-        method="caption",
+    实现委托给 tools/fonts.burn_subtitles，以兼容 moviepy 2.x 的 TextClip
+    签名变化（text= 关键字 + 绝对字体路径），避免旧写法把字幕文本误当 font。
+    """
+    return _burn_subtitles(
+        video_path,
+        srt_path,
+        font_size=font_size,
+        out_path=out_path,
     )
-    subtitles = SubtitlesClip(srt_path, generator)
-    result = CompositeVideoClip([video, subtitles.set_position(("center", "bottom"))])
-
-    if out_path is None:
-        base, ext = os.path.splitext(video_path)
-        out_path = f"{base}_subs{ext}"
-
-    result.write_videofile(
-        out_path,
-        codec="libx264",
-        audio_codec="aac",
-    )
-    video.close()
-    result.close()
-    return out_path

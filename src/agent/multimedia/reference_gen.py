@@ -20,10 +20,56 @@ Reference Sheet Generation Module
 
 import json
 import os
+import logging
 from typing import Dict, Any, Optional
+
+import requests
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from .prompts import REFERENCE_EXTRACTION_PROMPT
 from .tools.image_gen import generate_keyframe
+
+# 项目根目录：reference_gen.py -> multimedia -> agent -> src -> <root>
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# 参考图本地落盘根目录（相对于 PROJECT_ROOT）
+REFERENCE_SHEETS_DIR = PROJECT_ROOT / "output" / "reference_sheets"
+
+
+def _ext_from_url(url: str, default: str = ".png") -> str:
+    path = url.split("?")[0].split("#")[0]
+    ext = os.path.splitext(path)[1].lower()
+    return ext or default
+
+
+def _persist_reference_image(remote_url: str, thread_id: str, category: str, name: str) -> str:
+    """
+    把远程参考图下载到本地 output/reference_sheets/<thread_id>/<category>/，
+    返回可经 /media 访问的本地路径；下载失败时回退原远程 URL。
+    """
+    if not remote_url or remote_url.startswith("/media"):
+        return remote_url
+    tid = thread_id or "default"
+    safe_cat = "".join(c for c in category if c.isalnum() or c in "-_").strip() or "misc"
+    safe_name = "".join(c for c in name if c.isalnum() or c in "-_").strip() or "ref"
+    target_dir = REFERENCE_SHEETS_DIR / tid / safe_cat
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        ext = _ext_from_url(remote_url)
+        dest = target_dir / f"{safe_name}{ext}"
+        resp = requests.get(remote_url, timeout=120, stream=True)
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1 << 16):
+                if chunk:
+                    f.write(chunk)
+        if dest.is_file() and dest.stat().st_size > 0:
+            rel = str(dest.relative_to(PROJECT_ROOT)).replace(os.sep, "/")
+            return f"/media/{rel}"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("参考图本地持久化失败，回退远程 URL: %s (%s)", remote_url, exc)
+    return remote_url
 
 
 def _extract_elements(
@@ -135,9 +181,16 @@ def generate_reference_sheets(
     task: str,
     style_suffix: str,
     style_key: str = "",
+    thread_id: str = "",
 ) -> Dict[str, Any]:
     """
     核心函数：提取关键元素 → 生成参考图 → 返回结构化结果。
+
+    生成后会将远程链接下载到本地 output/reference_sheets/<thread_id>/，
+    并把 url 改写为可经 /media 稳定访问的本地路径（远程链接过期也不影响前端显示）。
+
+    Args:
+        thread_id: 当前运行所属 thread_id，用于在本地按线程隔离落盘。
 
     Returns:
         {
@@ -163,6 +216,7 @@ def generate_reference_sheets(
                 prompt,
                 size="1024*1024",  # square format for turnaround sheet
             )
+            url = _persist_reference_image(url, thread_id, "characters", name)
             sheets["characters"][name] = {"url": url, "description": desc, "name_cn": name_cn}
             print(f"    [OK] Character sheet: {name}")
         except Exception as e:
@@ -181,6 +235,7 @@ def generate_reference_sheets(
                 prompt,
                 size="1024*1024",
             )
+            url = _persist_reference_image(url, thread_id, "props", name)
             sheets["props"][name] = {"url": url, "description": desc, "name_cn": name_cn}
             print(f"    [OK] Prop sheet: {name}")
         except Exception as e:
@@ -199,6 +254,7 @@ def generate_reference_sheets(
                 prompt,
                 size="1024*1024",
             )
+            url = _persist_reference_image(url, thread_id, "environments", name)
             sheets["environments"][name] = {"url": url, "description": desc, "name_cn": name_cn}
             print(f"    [OK] Environment reference: {name}")
         except Exception as e:

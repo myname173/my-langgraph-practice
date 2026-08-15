@@ -51,7 +51,7 @@ logger = logging.getLogger("SWE_DataPipeline")
 # Three-Index 上下文增强（离线调用）
 # ==========================================
 
-def _try_get_repo_map(workspace_dir: Path, query: str = "") -> str:
+def _try_get_repo_map(workspace_dir: Optional[Path] = None, query: str = "") -> str:
     """
     尝试从已构建的 Three-Index 获取 Repo Map。
     失败时静默降级，不阻塞 pipeline。

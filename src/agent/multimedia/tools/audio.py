@@ -180,3 +180,36 @@ def mix_audio(
                 except Exception:
                     pass
     return out_path
+
+
+def has_audio_track(video_path: str) -> bool:
+    """判断视频文件是否自带音轨（音频流）。
+
+    背景：即梦 Seedance 1.5 Pro（视频3.5 Pro）等模型会生成带原生音轨
+    （环境音效/人声/音乐）的视频；而 dashscope 等 t2v 返回的视频通常是静音。
+    本函数供 audio_mixer_node 在「原生音轨优先」模式下判断是否跳过本地 TTS 混音。
+
+    实现：用 moviepy 自带的 ffmpeg binary 探测音轨（系统无需安装 ffmpeg），
+    通过解析 `ffmpeg -i file` 的 stderr 判断是否存在 Audio 流。
+
+    Returns:
+        存在音频流返回 True；探测失败/异常时返回 False（保守视为无音轨）。
+    """
+    if not video_path or not os.path.exists(video_path):
+        return False
+    try:
+        import subprocess
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        p = subprocess.run(
+            [exe, "-i", video_path],
+            capture_output=True,
+            text=True,
+            errors="ignore",
+            timeout=30,
+        )
+        stderr = (p.stderr or "") + (p.stdout or "")
+        return "Audio:" in stderr
+    except Exception as e:
+        print(f"    [WARN] 音轨检测失败（视为无音轨）: {e}")
+        return False

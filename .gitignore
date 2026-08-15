@@ -170,6 +170,28 @@ data/multimedia_checkpoints.sqlite-shm
 # ── 本地运行产物 / 临时文件（不应入库）──
 .codebuddy/
 output/
+_tmp_*
+_probe_state.json
+*.pid
+.pid_*.txt
+.media_server.pid
+.env.bak
+# PowerShell / 误打的空文件
+$null
+-w
+.langgraphignore
+# 云端会重新生成的下载缓存与冒烟占位报告
+workspace/_eval_cache/
+reports/
+logs/
+
+# ── 本地运行产物（巨型 SQLite / 生图产物 / 备份，严禁入库）──
+data/
+generated-images/
+workspace/assets/
+workspace/_training_data_bak_35/
+ppt_tmp/
+.playwright-cli/
 assets/debug/
 *.err
 *.out
@@ -197,4 +219,9 @@ frontend/dist/
 frontend/dev.log
 frontend/fix*.log
 frontend/vite_run.log
+frontend/logs_vite_*.txt
+frontend/vite.config.ts.timestamp-*.mjs
 *.tsbuildinfo
+
+# 训练数据本地备份（非核心，勿入库）
+workspace/_training_data/*.bak_*

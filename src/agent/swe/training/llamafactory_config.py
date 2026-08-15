@@ -59,7 +59,7 @@ SFT_DEFAULTS = {
     "overwrite_output_dir": True,
     "per_device_train_batch_size": 2,
     "gradient_accumulation_steps": 8,
-    "learning_rate": "2.0e-4",
+    "learning_rate": 2e-4,
     "num_train_epochs": 3.0,
     "lr_scheduler_type": "cosine",
     "warmup_ratio": 0.1,
@@ -90,7 +90,7 @@ DPO_DEFAULTS = {
     "overwrite_output_dir": True,
     "per_device_train_batch_size": 1,
     "gradient_accumulation_steps": 16,
-    "learning_rate": "5.0e-5",
+    "learning_rate": 5e-5,
     "num_train_epochs": 2.0,
     "lr_scheduler_type": "cosine",
     "warmup_ratio": 0.1,
@@ -116,7 +116,7 @@ GRPO_DEFAULTS = {
     "overwrite_output_dir": True,
     "per_device_train_batch_size": 1,
     "gradient_accumulation_steps": 16,
-    "learning_rate": "1.0e-5",
+    "learning_rate": 1e-5,
     "num_train_epochs": 2.0,
     "lr_scheduler_type": "cosine",
     "warmup_ratio": 0.05,
@@ -243,16 +243,36 @@ def generate_grpo_config(
     return {k: v for k, v in config.items() if v is not None}
 
 
+def infer_template(model_name_or_path: str, template: Optional[str] = None) -> str:
+    """
+    根据模型名称/路径自动推导 LlamaFactory 的 template。
+    优先级：显式传入 > 名称关键字匹配 > 默认 qwen。
+    """
+    if template:
+        return template
+    name = (model_name_or_path or "").lower()
+    if "deepseek" in name:
+        return "deepseek"
+    if "llama" in name or "mistral" in name:
+        return "llama3"
+    if "qwen" in name or "qwq" in name:
+        return "qwen"
+    if "glm" in name:
+        return "chatglm3"
+    return "qwen"
+
+
 def generate_and_save_config(
     mode: str,
     model_name_or_path: str,
     data_dir: Path,
     output_dir: Path,
-    template: str = "qwen",
+    template: Optional[str] = None,
     adapter_name_or_path: Optional[str] = None,
     overrides: Optional[Dict] = None,
     also_write_callback: bool = True,
 ) -> Path:
+    """生成 YAML 配置并写入磁盘，返回配置文件路径。"""
     """
     生成 YAML 配置并写入磁盘，返回配置文件路径。
     同时在 output_dir 下写入 custom_callbacks.py 模板。
@@ -264,17 +284,19 @@ def generate_and_save_config(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    resolved_template = infer_template(model_name_or_path, template)
+
     if mode == "sft":
         config = generate_sft_config(
             model_name_or_path, data_dir,
             output_dir=str(output_dir / "model"),
-            template=template, overrides=overrides,
+            template=resolved_template, overrides=overrides,
         )
     elif mode == "dpo":
         config = generate_dpo_config(
             model_name_or_path, data_dir,
             output_dir=str(output_dir / "model"),
-            template=template,
+            template=resolved_template,
             adapter_name_or_path=adapter_name_or_path,
             overrides=overrides,
         )
@@ -282,7 +304,7 @@ def generate_and_save_config(
         config = generate_grpo_config(
             model_name_or_path, data_dir,
             output_dir=str(output_dir / "model"),
-            template=template, overrides=overrides,
+            template=resolved_template, overrides=overrides,
         )
     else:
         raise ValueError(f"不支持的 mode: {mode}。请选择 sft / dpo / grpo")
@@ -332,10 +354,10 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="生成 LlamaFactory 训练配置")
     parser.add_argument("--mode", choices=["sft", "dpo", "grpo"], required=True)
-    parser.add_argument("--model", required=True, help="模型名称或路径，如 Qwen/Qwen2.5-7B-Instruct")
+    parser.add_argument("--model", required=True, help="模型名称或路径，如 Qwen/Qwen2.5-7B-Instruct 或 deepseek-ai/deepseek-coder-7b-instruct")
     parser.add_argument("--data-dir", default="./workspace/_training_data")
     parser.add_argument("--output-dir", default="./llamafactory_runs")
-    parser.add_argument("--template", default="qwen")
+    parser.add_argument("--template", default=None, help="留空则根据 --model 自动推导（deepseek/qwen/llama3 等）")
     parser.add_argument("--adapter", default=None, help="SFT checkpoint 路径（DPO 继续训练用）")
     args = parser.parse_args()
 

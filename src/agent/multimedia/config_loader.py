@@ -127,10 +127,12 @@ def transition_threshold() -> Dict[str, float]:
 
 # ── 与 graph 解耦的纯工具（无 moviepy/edge_tts 重依赖，便于单测与复用）──
 
-def make_placeholder_clip(duration: float = 2.0, size=(1280, 720), out_path: str = "", idx: int = -1) -> str:
-    """生成占位黑场视频，返回本地文件路径（失败则返回空字符串）。
+def make_placeholder_clip(duration: float = 2.0, size=(1280, 720), out_path: str = "", idx: int = -1, label: str = "") -> str:
+    """生成占位降级视频，返回本地文件路径（失败则返回空字符串）。
 
     内部 lazy import moviepy：依赖缺失时不抛异常，返回 ""（降级不可用但不阻断主流程）。
+    视觉上采用深灰底 + 居中文字标注（默认"额度耗尽·跳过"，可传 label 覆盖），
+    使成片中"因额度耗尽被降级的镜头"可辨识，而非突兀纯黑。
     """
     import os as _os
     if not out_path:
@@ -147,10 +149,38 @@ def make_placeholder_clip(duration: float = 2.0, size=(1280, 720), out_path: str
         print(f"    [WARN] [降级] 占位黑场生成失败（moviepy 不可用）: {e}")
         return ""
     try:
-        clip = ColorClip(size=size, color=(0, 0, 0), duration=duration)
+        # 【修复】占位卡改为明显"风格化提示卡"而非近黑深灰底（原 (32,32,36) 观感接近黑屏）。
+        # 采用仙侠暗蓝紫底 + 暖金文字，使降级镜头在成片中可被辨识为"占位提示卡"，
+        # 而非突兀黑屏（stitcher 已默认跳过 shot_failed 占位卡，此处仅作视觉兜底）。
+        clip = ColorClip(size=size, color=(20, 18, 34), duration=duration)
         clip = clip.with_audio(None)  # 静音底，避免 audio_mixer 拼接报错
+        # 尝试叠加文字标注；TextClip 依赖字体，缺失时静默降级为纯底
+        txt_clip = None
+        try:
+            caption = label or f"镜头 {idx + 1}\n额度耗尽 · 已跳过"
+            # moviepy 2.x TextClip 需用 text= 关键字 + 绝对字体路径，避免误用字体名
+            from .tools.fonts import make_text_clip
+            txt_clip = (
+                make_text_clip(
+                    caption, font_size=48, color=(230, 200, 140),
+                    size=(None, None), method="caption",
+                )
+                .set_duration(duration)
+                .resize(height=int(size[1] * 0.5))
+                .set_position("center")
+            )
+            clip = clip.set_duration(duration).fx(lambda c: c) if hasattr(clip, "fx") else clip
+            from moviepy.editor import CompositeVideoClip  # type: ignore
+            clip = CompositeVideoClip([clip, txt_clip])
+        except Exception as te:  # pragma: no cover - 字体/依赖缺失时降级为纯深灰底
+            print(f"    [INFO] [降级] 占位文字标注不可用，使用纯深灰底: {te}")
         clip.write_videofile(out_path, fps=24, codec="libx264", audio=False, logger=None)
         clip.close()
+        if txt_clip is not None:
+            try:
+                txt_clip.close()
+            except Exception:
+                pass
         return out_path
     except Exception as e:  # pragma: no cover
         print(f"    [WARN] [降级] 占位黑场写入失败: {e}")
@@ -175,3 +205,94 @@ def persist_studio_output(studio_result: Dict[str, Any], idx: int) -> str:
     except Exception as e:  # pragma: no cover - 落盘失败不阻断主流程
         print(f"    ⚠️ [瘦身] studio_output 落盘失败（已回退为仅存 state）: {e}")
         return ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Google AI Studio（Gemini）接入配置读取
+# 用于图像/视频生成的替代后端（Imagen / Veo），当 DashScope 免费额度耗尽时启用。
+# 仅读取 .env 中的 GEMINI_* 变量，不在此处发起任何网络请求。
+# ─────────────────────────────────────────────────────────────────────────────
+def get_google_config() -> Dict[str, Any]:
+    """读取 Google AI Studio 配置，返回字典。
+
+    返回字段：
+      - enabled:   MULTIMODIA_BACKEND == "google" 且 GEMINI_API_KEY 已填（非占位符）
+      - api_key:   GEMINI_API_KEY（占位符 __FILL_ME_* 视为未填）
+      - backend:   MULTIMODIA_BACKEND（dashscope / google）
+      - image_model: GEMINI_IMAGE_MODEL
+      - video_model: GEMINI_VIDEO_MODEL
+      - base_url:  GEMINI_BASE_URL
+    """
+    raw_key = os.getenv("GEMINI_API_KEY", "").strip()
+    backend = os.getenv("MULTIMODIA_BACKEND", "dashscope").strip().lower()
+    # 占位符视为未填：__FILL_ME_GOOGLE_AI_STUDIO_KEY__
+    key_filled = bool(raw_key) and not raw_key.startswith("__FILL_ME_")
+    return {
+        "enabled": backend == "google" and key_filled,
+        "api_key": raw_key if key_filled else "",
+        "backend": backend,
+        "image_model": os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image").strip(),
+        "video_model": os.getenv("GEMINI_VIDEO_MODEL", "veo-3.1-generate-preview").strip(),
+        "base_url": os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").strip(),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 即梦 AI Free（jimeng-api）接入配置读取（白嫖即梦网页版每日免费积分）
+# 把即梦官网每日赠送的免费积分暴露为 OpenAI 兼容本地 API（生图 / 生视频 / Seedance）。
+# 仅读取 .env 中的 JIMENG_* 变量，不在此处发起任何网络请求。
+# 用作 DashScope / Google / SiliconFlow 之外的补充免费后端（缓解百炼额度紧张）。
+# ─────────────────────────────────────────────────────────────────────────────
+def get_jimeng_config() -> Dict[str, Any]:
+    """读取即梦免费后端配置，返回字典。
+
+    返回字段：
+      - enabled:     MULTIMODIA_BACKEND == "jimeng" 且 JIMENG_SESSION_ID 已填
+      - has_session: JIMENG_SESSION_ID 是否非空（用于 fallback 判断，即使 backend 非 jimeng）
+      - session_ids: 逗号分隔解析后的 sessionid 列表
+      - base_url:    JIMENG_BASE_URL
+      - backend:     MULTIMODIA_BACKEND
+    """
+    raw = os.getenv("JIMENG_SESSION_ID", "").strip()
+    backend = os.getenv("MULTIMODIA_BACKEND", "dashscope").strip().lower()
+    ids = [s.strip() for s in raw.split(",") if s.strip()] if raw else []
+    return {
+        "enabled": backend == "jimeng" and bool(ids),
+        "has_session": bool(ids),
+        "session_ids": ids,
+        "base_url": os.getenv("JIMENG_BASE_URL", "http://localhost:8080/v1").strip().rstrip("/"),
+        "backend": backend,
+    }
+
+
+def get_visual_backend() -> str:
+    """统一返回当前激活的多媒体后端名称（小写）。
+
+    取值：dashscope（默认）| google | jimeng | siliconflow
+    供 image_gen / video_gen 在入口处判断是否走对应分支。
+    """
+    return os.getenv("MULTIMODIA_BACKEND", "dashscope").strip().lower()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SiliconFlow（硅基流动）接入配置读取（img2img 图生图后端）
+# 用素材参考图作为锚点，生成本镜头专属首/尾帧（而非把素材图直接当首尾帧）。
+# 仅读取 .env 中的 SILICONFLOW_* 变量，不在此处发起任何网络请求。
+# ─────────────────────────────────────────────────────────────────────────────
+def get_siliconflow_config() -> Dict[str, Any]:
+    """读取 SiliconFlow 后端配置，返回字典。
+
+    返回字段：
+      - enabled:   SILICONFLOW_API_KEY 已填（非占位符）
+      - api_key:   SILICONFLOW_API_KEY
+      - base_url:  SILICONFLOW_BASE_URL
+      - image_model: SILICONFLOW_IMAGE_MODEL（img2img 模型）
+    """
+    raw_key = os.getenv("SILICONFLOW_API_KEY", "").strip()
+    key_filled = bool(raw_key) and not raw_key.startswith("__FILL_ME_")
+    return {
+        "enabled": key_filled,
+        "api_key": raw_key if key_filled else "",
+        "base_url": os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").strip().rstrip("/"),
+        "image_model": os.getenv("SILICONFLOW_IMAGE_MODEL", "Kwai-Kolors/Kolors").strip(),
+    }

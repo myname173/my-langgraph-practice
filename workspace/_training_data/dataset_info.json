@@ -1,0 +1,49 @@
+{
+  "swe_agent_sft": {
+    "file_name": "sft_success.jsonl",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations"
+    },
+    "tags": {
+      "role_tag": "from",
+      "content_tag": "value",
+      "user_tag": "human",
+      "assistant_tag": "gpt",
+      "system_tag": "system",
+      "function_tag": "function_call",
+      "observation_tag": "observation"
+    }
+  },
+  "swe_agent_dpo": {
+    "file_name": "dpo_pairs.jsonl",
+    "ranking": true,
+    "columns": {
+      "prompt": "prompt",
+      "chosen": "chosen",
+      "rejected": "rejected"
+    }
+  },
+  "swe_agent_grpo": {
+    "file_name": "grpo_all.jsonl",
+    "columns": {
+      "prompt": "prompt",
+      "response": "response",
+      "reward": "reward"
+    }
+  },
+  "swe_skills_sft": {
+    "file_name": "skills_sft.jsonl",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations"
+    },
+    "tags": {
+      "role_tag": "from",
+      "content_tag": "value",
+      "user_tag": "human",
+      "assistant_tag": "gpt",
+      "system_tag": "system"
+    }
+  }
+}

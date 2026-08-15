@@ -2,7 +2,8 @@ import { resolveMediaUrl } from "../lib/langgraphClient";
 import type { MultimediaState } from "../types";
 
 export function FinalMoviePlayer({ state }: { state: MultimediaState }) {
-  // 优先播放带音频的最终成片
+  // 严格以会话自己记录的成片路径为准（后端已按 thread_id 隔离写入，
+  // 不再强行套用 output/review/FINAL_成片.mp4 通用文件，避免“张冠李戴”）。
   const withAudio = resolveMediaUrl(state.final_movie_with_audio);
   const silent = resolveMediaUrl(state.final_movie_path);
   const src = withAudio || silent;

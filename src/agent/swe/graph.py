@@ -41,21 +41,26 @@ logger = logging.getLogger("SWE_Graph")
 # ==========================================
 # LLM 初始化
 # ==========================================
-# SWE 主模型：百炼免费额度对带快照日期的 qwen3.7-max-2026-05-17 返回 403 FreeTierOnly，
-# 裸名 qwen3.7-max 可用。可通过 MODEL_NAME 覆盖；SWE_FALLBACK_MODELS（逗号分隔）
-# 指定不可用时的降级模型列表（默认 qwen3.7-max, qwen3.7-plus, deepseek-v4-flash-0731）。
+# SWE 主模型：优先使用 SWE_ 前缀专用变量（DeepSeek 接入），避免影响 multimedia 的 DashScope 接入。
+# 若未设置 SWE_* 变量，则回退到全局 MODEL_NAME / OPENAI_*（百炼 DashScope）。
+# SWE_MODEL_NAME 默认 deepseek-v4-flash；SWE_FALLBACK_MODELS 指定不可用时的降级模型列表。
 def _build_swe_llm() -> ChatOpenAI:
-    primary = os.getenv("MODEL_NAME", "qwen3.7-max")
+    primary = os.getenv("SWE_MODEL_NAME", os.getenv("MODEL_NAME", "deepseek-v4-flash"))
     fallbacks = [
         m.strip() for m in os.getenv(
-            "SWE_FALLBACK_MODELS", "qwen3.7-max,qwen3.7-plus,deepseek-v4-flash-0731"
+            "SWE_FALLBACK_MODELS", os.getenv("SWE_FALLBACK_MODELS_DEFAULT", "")
+        ).split(",") if m.strip()
+    ] or [
+        m.strip() for m in os.getenv(
+            "SWE_FALLBACK_MODELS_DEFAULT",
+            "deepseek-v4-pro,deepseek-v4-flash"
         ).split(",") if m.strip()
     ]
     models = list(dict.fromkeys([primary, *fallbacks]))
     return ChatOpenAI(
         model=models[0],
-        openai_api_key=os.getenv("OPENAI_API_KEY"),
-        openai_api_base=os.getenv("OPENAI_BASE_URL"),
+        openai_api_key=os.getenv("SWE_OPENAI_API_KEY", os.getenv("OPENAI_API_KEY")),
+        openai_api_base=os.getenv("SWE_OPENAI_BASE_URL", os.getenv("OPENAI_BASE_URL")),
         temperature=0.1,
     )
 

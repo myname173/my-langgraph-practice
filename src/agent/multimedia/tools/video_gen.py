@@ -8,6 +8,13 @@ from requests.exceptions import (
     ChunkedEncodingError, ReadTimeout, ConnectTimeout,
 )
 from dotenv import load_dotenv
+from ..config_loader import get_visual_backend, get_jimeng_config
+from . import jimeng
+from . import agnes
+from pathlib import Path as _Path
+
+# 项目根目录：video_gen.py -> tools -> multimedia -> agent -> src -> <root>
+PROJECT_ROOT = _Path(__file__).resolve().parents[4]
 
 load_dotenv()
 
@@ -51,10 +58,10 @@ def _retry_request(request_fn, max_retries=_MAX_NETWORK_RETRIES, backoff=_RETRY_
             last_err = e
             if attempt < max_retries:
                 wait = backoff[min(attempt, len(backoff) - 1)]
-                print(f"    ⚠️ [{label}] 网络瞬断 ({type(e).__name__})，{wait}s 后重试 ({attempt+1}/{max_retries})...")
+                print(f"    [WARN] [{label}] 网络瞬断 ({type(e).__name__})，{wait}s 后重试 ({attempt+1}/{max_retries})...")
                 time.sleep(wait)
             else:
-                print(f"    ❌ [{label}] 网络重试 {max_retries} 次后仍失败: {e}")
+                print(f"    [FAIL] [{label}] 网络重试 {max_retries} 次后仍失败: {e}")
     raise last_err  # type: ignore[misc]
 
 class FreeTierQuotaExhaustedError(RuntimeError):
@@ -202,16 +209,42 @@ def _build_parameters_kf2v(
         params["negative_prompt"] = negative_prompt
     return params
 
+def _as_data_url(url_or_path: str) -> str:
+    """
+    将图像输入统一为服务端可接受的 url 形式：
+      - 已是 http(s)/oss:///data: 开头 → 原样返回
+      - 本地文件路径 → 读取并内联为 data:{mime};base64,{data}（避免 "url error"）
+    """
+    if not url_or_path:
+        return url_or_path
+    if url_or_path.startswith(("http://", "https://", "oss://", "data:")):
+        return url_or_path
+    # 视为本地路径
+    try:
+        import mimetypes
+        import base64 as _b64
+        mime = mimetypes.guess_type(url_or_path)[0] or "image/png"
+        with open(url_or_path, "rb") as f:
+            b64 = _b64.b64encode(f.read()).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception as e:
+        print(f"    [WARN] 首帧图转 base64 失败，回退原值: {e}")
+        return url_or_path
+
+
 def _build_payload_kf2v(model_name: str, first_frame_url: str, last_frame_url: str, prompt: str, **kwargs) -> dict:
     """
     Build payload for kf2v (keyframe-to-video) models.
-    wan2.7 新 API（image2video 端点）使用 media 数组：[{type:first_frame,url}, {type:last_frame,url}]，
-    与 i2v 的 media.frames 结构同源，仅多一个 last_frame 元素。
-    注意：旧版 first_frame_url/last_frame_url 扁平字段在 wan2.7-r2v 上会报 "url error"，已弃用。
+    万相2.7-图生视频（wan2.7-r2v / happyhorse-1.1-r2v）使用 media 数组：
+    [{type:first_frame,url}, {type:last_frame,url}]，端点 video-generation/video-synthesis。
+    url 支持 http(s)/oss:///data:base64 三种；本地路径自动内联 base64（修正 "url error"）。
     """
-    media = [{"type": "first_frame", "url": first_frame_url}]
-    if last_frame_url:
-        media.append({"type": "last_frame", "url": last_frame_url})
+    first_url = _as_data_url(first_frame_url)
+    last_url = _as_data_url(last_frame_url) if last_frame_url else None
+
+    media = [{"type": "first_frame", "url": first_url}]
+    if last_url:
+        media.append({"type": "last_frame", "url": last_url})
 
     input_obj = {
         "media": media,
@@ -336,32 +369,35 @@ def _poll_task(session: requests.Session, poll_url: str, headers: dict,
         time.sleep(5)
 
 # ── 视频生成模型优先级（主 → fallback）──
-# 仅使用百炼免费额度可用模型（见 .env 清单）。按能力分三条链：
-#   r2v (首尾帧/首帧双控)：wan2.7-r2v-2026-06-12, happyhorse-1.1-r2v
-#       → 端点 image2video/video-synthesis，schema 用 first_frame_url / last_frame_url
-#       → 关键：wan2.7-r2v 在 video-generation 端点【不接受】media/img_url，必须走 image2video 端点
-#   i2v (图生视频)  ：happyhorse-1.1-i2v
-#       → 端点 video-generation/video-synthesis，schema 用 media:[{type:first_frame,url}]
-#   t2v (文生视频)  ：wan2.7-t2v-2026-06-12, wan3.0-video, happyhorse-1.1-t2v
+# 自 2026-08-11 起，用户仅保有【文生视频(t2v)】与【文生图】免费额度，
+# r2v / i2v 模型已无额度（happyhorse-1.1-i2v 已耗尽会直接中止流程），
+# 因此默认【优先走 t2v 链】，且 t2v 链仅包含有额度的模型。
+#
+#   t2v (文生视频，有额度)：wan2.7-t2v-2026-06-12, wan3.0-video,
+#                            happyhorse-1.1-t2v, happyhorse-t2v
 #       → 端点 video-generation/video-synthesis，input 仅 prompt（无图）
+#   r2v / i2v（无额度，保留代码但默认不触发）：
+#       仅当 env DASHSCOPE_VIDEO_MODEL 显式指定为 r2v/i2v 模型时才启用。
 _R2V_MODEL_CHAIN = [
-    "wan2.7-r2v-2026-06-12",    # 万相首尾帧双控，50秒免费
-    "happyhorse-1.1-r2v",       # 参考图生视频，10秒免费
+    "wan2.7-r2v-2026-06-12",    # 万相首尾帧双控（当前无额度）
+    "happyhorse-1.1-r2v",       # 参考图生视频（当前无额度）
 ]
 _I2V_MODEL_CHAIN = [
-    "happyhorse-1.1-i2v",        # 图生视频，10秒免费（仅此模型走 video-generation + media.frames）
+    "happyhorse-1.1-i2v",        # 图生视频（额度已耗尽，默认不触发）
 ]
 _T2V_MODEL_CHAIN = [
     "wan2.7-t2v-2026-06-12",     # 文生视频，50秒免费
     "wan3.0-video",              # 文生视频，30秒免费
-    "happyhorse-1.1-t2v",        # 文生视频，10秒免费
+    "happyhorse-1.1-t2v",        # 文生视频（env 注释名）
+    "happyhorse-t2v",            # 文生视频（用户口头清单名，双写做 fallback）
 ]
 
-# kf2v (首尾帧/首帧双控) 模型链 —— 始终优先，无论是否双帧。
-# r2v 模型支持「仅首帧」模式（只传 first_frame_url，不传 last_frame_url），
-# 因此即使调用方未提供 last_image_url，也应走 image2video 端点而非 video-generation。
+# kf2v = r2v 链别名；默认不再优先。仅 env 显式指定时启用。
 _KF2V_MODEL_CHAIN = _R2V_MODEL_CHAIN
-_KF2V_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis"
+# 修正（2026-08-12）：wan2.7-r2v / happyhorse-1.1-r2v 属"万相2.7-图生视频"族，
+# 官方端点统一为 video-generation/video-synthesis（与 i2v 同端点），
+# 旧 image2video 路径会导致 404 / "url error"。
+_KF2V_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
 _I2V_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
 
 # 默认负面提示词：抑制静态/僵硬动作
@@ -372,13 +408,65 @@ _MOTION_NEGATIVE_PROMPT = (
 )
 
 
-def generate_video_from_image(image_url: str, prompt: str, last_image_url: str = "") -> str:
+def generate_video_from_image(
+    image_url: str,
+    prompt: str,
+    last_image_url: str = "",
+    first_frame_path: str = "",
+    thread_id: str = "",
+    reference_images: list = None,
+    reference_note: str = "",
+) -> str:
     """
-    调用通义万相图生视频模型（支持多模型 fallback）。
+    调用视频生成模型（支持多后端 fallback）。
 
-    当提供 last_image_url 时，优先使用 kf2v (首尾帧双控) 模型链，
-    再降级到 i2v 模型链。kf2v 模型使用独立 endpoint 和 schema。
+    视频后端优先级（VIDEO_PROVIDER 环境变量，默认 agnes）：
+      - agnes:    Agnes AI 免费视频后端（默认）。支持 keyframes 多图模式，
+                  把「首尾帧关键帧 + 素材参考图(角色转面图/道具/环境参考图)」
+                  完整注入，免费且无需信用卡。每分钟限 1 次（内置退避）。
+      - jimeng:   即梦免费后端（图生/文生视频，仅首帧，无多参考图）。
+      - dashscope:通义万相（t2v 免费链默认；i2v/r2v 仅在 DASHSCOPE_VIDEO_MODEL 显式指定时启用）。
+
+    reference_images: 素材参考图列表（URL/本地路径），供 agnes keyframes 多图模式注入。
+    reference_note:   素材参考图语义锚点文本，拼入 prompt（jimeng/dashscope 分支用）。
+
+    说明：默认策略（2026-08-11 起）对 dashscope 仅走 t2v 免费链以保额度可用；
+    r2v/i2v 链仅在 DASHSCOPE_VIDEO_MODEL 显式指定时启用。
     """
+    # 规范化 thread_id（空串 -> _legacy），供 jimeng 分支按会话隔离产物
+    _thread_id = thread_id or ""
+    reference_images = reference_images or []
+
+    # ── Agnes AI 免费视频后端（默认 VIDEO_PROVIDER=agnes）──
+    # 完整融入首尾帧关键帧 + 素材参考图（keyframes 多图模式）。
+    # 注意：agnes 使用自有 API key（AGNES_API_KEY），与 MULTIMODIA_BACKEND 解耦，
+    # 因此只要 VIDEO_PROVIDER=agnes 且 key 已配，即走此免费渠道，与生图后端无关。
+    _video_provider = os.getenv("VIDEO_PROVIDER", "agnes").strip().lower()
+    if _video_provider == "agnes":
+        try:
+            ff = first_frame_path or image_url
+            _final_prompt = (prompt + "\n\n[参考图一致性约束]\n" + reference_note).strip() if reference_note else prompt
+            return agnes.generate_video(
+                _final_prompt,
+                reference_images=reference_images,
+                first_frame_url=ff,
+                last_frame_url=last_image_url if last_image_url else "",
+                width=1280, height=720, num_frames=81, frame_rate=24,
+                thread_id=_thread_id,
+            )
+        except Exception as e:
+            # 【修复】Agnes 是用户指定的唯一视频后端，不得静默回退到无权限的
+            # dashscope 视频链（会掩盖真实错误并必然失败 AccessDenied）。
+            # 直接抛出，交由 video_gen_node 的 except 分支按失败/重试/跳过处理。
+            raise RuntimeError(f"视频生成失败（Agnes 后端）: {e}") from e
+
+    # ── 即梦 AI Free 后端分支（白嫖网页版每日免费积分）──
+    # 当 MULTIMODIA_BACKEND == "jimeng" 时，走即梦免费生视频（图生/文生视频）。
+    if get_visual_backend() == "jimeng":
+        ff = first_frame_path or image_url
+        _jimeng_prompt = (prompt + "\n\n" + reference_note).strip() if reference_note else prompt
+        return jimeng.generate_video(_jimeng_prompt, first_frame_url=ff if ff else None, thread_id=_thread_id)
+
     api_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError(
@@ -395,138 +483,130 @@ def generate_video_from_image(image_url: str, prompt: str, last_image_url: str =
 
     # 从环境变量读取主模型（覆盖默认链）
     env_model = os.getenv("DASHSCOPE_VIDEO_MODEL")
+    last_error = None
 
-    # ── Phase 1: kf2v / r2v（image2video 端点，first_frame_url 可选 last_frame_url）──
-    # 始终运行：r2v 模型支持「仅首帧」模式（不传 last_frame_url），因此即使调用方
-    # 未提供 last_image_url，也应优先走 image2video 端点，而非 video-generation 端点。
-    # 这正是修复「wan2.7-r2v 在 video-generation 端点报 input.media schema 错误」的关键。
-    kf2v_chain = list(_KF2V_MODEL_CHAIN)
-    if env_model and env_model not in kf2v_chain:
-        pass  # env_model 留给后续 phase
-    for model_name in kf2v_chain:
-        print(f"    [视频渲染] 尝试 kf2v/r2v 模型: {model_name}")
-        # 万相 r2v 系列分辨率上限 720P；happyhorse 等统一以 720P 提交更稳妥
-        resolution = "720P"
-        payload = _build_payload_kf2v(
-            model_name, image_url, last_image_url, prompt,
-            resolution=resolution,
-            negative_prompt=_MOTION_NEGATIVE_PROMPT,
-        )
+    # 若 env 显式指定了 r2v / i2v 模型，则优先走对应的图生视频链
+    env_is_r2v = env_model in _R2V_MODEL_CHAIN
+    env_is_i2v = env_model in _I2V_MODEL_CHAIN
 
+    if env_is_r2v:
+        # ── 显式 r2v（image2video 端点）──
+        kf2v_chain = [env_model] + [m for m in _R2V_MODEL_CHAIN if m != env_model]
+        for model_name in kf2v_chain:
+            print(f"    [视频渲染] 尝试 kf2v/r2v 模型: {model_name}")
+            resolution = "720P"
+            payload = _build_payload_kf2v(
+                model_name, image_url, last_image_url, prompt,
+                resolution=resolution, negative_prompt=_MOTION_NEGATIVE_PROMPT,
+            )
+            try:
+                task_id = _submit_task(session, _KF2V_ENDPOINT, headers, payload)
+                print(f"    [视频渲染进度] kf2v/r2v 生成中 ({model_name})，Task ID: {task_id}")
+                poll_url = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+                return _poll_task(session, poll_url, headers)
+            except FreeTierQuotaExhaustedError:
+                print(f"    [WARN] kf2v {model_name} 免费额度耗尽，切换...")
+                last_error = FreeTierQuotaExhaustedError(f"{model_name} 额度耗尽")
+                continue
+            except VideoPollTimeoutError as e:
+                print(f"    [WARN] kf2v {model_name} 轮询超时，切换: {e}")
+                last_error = e
+                continue
+            except VideoSchemaMismatchError as e:
+                print(f"    [WARN] kf2v {model_name} schema 不匹配: {e}")
+                last_error = e
+                continue
+            except Exception as e:
+                err_text = str(e)
+                if _is_recoverable_api_error(err_text):
+                    print(f"    [WARN] kf2v {model_name} 不可用（额度/余额/限流）: {e}")
+                    last_error = e
+                    continue
+                raise
+
+    if env_is_i2v:
+        # ── 显式 i2v（video-generation 端点）──
+        model_chain = [env_model] + [m for m in _I2V_MODEL_CHAIN if m != env_model]
+        for model_name in model_chain:
+            print(f"    [视频渲染] 尝试 i2v 模型: {model_name}")
+            payload_candidates = [
+                ("media.frames", _build_payload_media_frames(
+                    model_name, image_url, "", prompt,
+                    negative_prompt=_MOTION_NEGATIVE_PROMPT)),
+                ("img_url", _build_payload_img_url(
+                    model_name, image_url, prompt,
+                    negative_prompt=_MOTION_NEGATIVE_PROMPT)),
+            ]
+            for attempt_name, payload in payload_candidates:
+                print(f"    [视频渲染提交] 尝试 schema: {attempt_name} ({model_name})")
+                try:
+                    task_id = _submit_task(session, _I2V_ENDPOINT, headers, payload)
+                    print(f"    [视频渲染进度] i2v 生成中 ({model_name})，Task ID: {task_id}")
+                    poll_url = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+                    return _poll_task(session, poll_url, headers)
+                except FreeTierQuotaExhaustedError:
+                    print(f"    [WARN] 模型 {model_name} 免费额度耗尽，切换 fallback...")
+                    last_error = FreeTierQuotaExhaustedError(f"{model_name} 额度耗尽")
+                    break
+                except VideoPollTimeoutError as e:
+                    print(f"    [WARN] 模型 {model_name} 轮询超时，切换 fallback: {e}")
+                    last_error = e
+                    break
+                except VideoSchemaMismatchError as e:
+                    last_error = e
+                    print(f"    [WARN] schema 不匹配，准备切换备用入参结构: {e}")
+                    continue
+                except Exception as e:
+                    last_error = e
+                    err_text = str(e)
+                    if _contains_schema_error(err_text):
+                        print(f"    [WARN] 捕获到 schema 类错误，准备切换备用入参结构: {err_text}")
+                        continue
+                    if _is_recoverable_api_error(err_text):
+                        print(f"    [WARN] 模型 {model_name} 不可用（额度/余额/限流），切换 fallback: {e}")
+                        break
+                    raise
+
+    # ── 默认主链：t2v 文生视频（有额度）──
+    # 无论是否提供首帧图，统一走 t2v。env_model 若属于 t2v 链则前置。
+    print("    [INFO] 默认走 t2v 文生视频链（用户持有额度）")
+    if env_model and env_model not in _T2V_MODEL_CHAIN:
+        # env 指定的不是 t2v 模型且上面已处理，这里忽略
+        pass
+    t2v_chain = ([env_model] + _T2V_MODEL_CHAIN) if (env_model and env_model in _T2V_MODEL_CHAIN) else _T2V_MODEL_CHAIN
+    for model_name in t2v_chain:
+        print(f"    [视频渲染] 尝试 t2v 模型: {model_name}")
+        payload = _build_payload_t2v(
+            model_name, prompt, negative_prompt=_MOTION_NEGATIVE_PROMPT)
         try:
-            task_id = _submit_task(session, _KF2V_ENDPOINT, headers, payload)
-            print(f"    [视频渲染进度] kf2v/r2v 生成中 ({model_name})，Task ID: {task_id}")
+            task_id = _submit_task(session, _I2V_ENDPOINT, headers, payload)
+            print(f"    [视频渲染进度] 正在文生视频 ({model_name})，Task ID: {task_id}")
             poll_url = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
             return _poll_task(session, poll_url, headers)
-
         except FreeTierQuotaExhaustedError:
-            print(f"    [WARN] kf2v {model_name} 免费额度耗尽，切换...")
+            print(f"    [WARN] t2v {model_name} 免费额度耗尽，切换...")
+            last_error = FreeTierQuotaExhaustedError(f"{model_name} 额度耗尽")
             continue
         except VideoPollTimeoutError as e:
-            print(f"    [WARN] kf2v {model_name} 轮询超时，切换: {e}")
-            continue
-        except VideoSchemaMismatchError as e:
-            print(f"    [WARN] kf2v {model_name} schema 不匹配: {e}")
+            print(f"    [WARN] t2v {model_name} 轮询超时，切换: {e}")
+            last_error = e
             continue
         except Exception as e:
             err_text = str(e)
             if _is_recoverable_api_error(err_text):
-                print(f"    [WARN] kf2v {model_name} 不可用（额度/余额/限流）: {e}")
+                print(f"    [WARN] t2v {model_name} 不可用: {e}")
+                last_error = e
                 continue
             raise
 
-    print("    [INFO] kf2v/r2v 链全部不可用，降级到 i2v 链")
-
-    # ── Phase 2: i2v 图生视频（video-generation 端点，media.frames）──
-    if env_model:
-        model_chain = [env_model] + [m for m in _I2V_MODEL_CHAIN if m != env_model]
-    else:
-        model_chain = _I2V_MODEL_CHAIN
-
-    last_error = None
-
-    for model_name in model_chain:
-        print(f"    [视频渲染] 尝试模型: {model_name}")
-
-        # happyhorse-1.1-i2v 是纯 i2v 单帧模型，不接受 last_frame 元素
-        # （服务端要求 media[1].type 必须是 first_frame，导致 schema 失败），
-        # 因此 i2v 链固定只传首帧，忽略 last_image_url。
-        i2v_last_frame = ""
-        payload_candidates = [
-            ("media.frames", _build_payload_media_frames(
-                model_name, image_url, i2v_last_frame, prompt,
-                negative_prompt=_MOTION_NEGATIVE_PROMPT)),
-            ("img_url", _build_payload_img_url(
-                model_name, image_url, prompt,
-                negative_prompt=_MOTION_NEGATIVE_PROMPT)),
-        ]
-
-        for attempt_name, payload in payload_candidates:
-            print(f"    [视频渲染提交] 尝试 schema: {attempt_name} ({model_name})")
-
-            try:
-                task_id = _submit_task(session, _I2V_ENDPOINT, headers, payload)
-                print(f"    [视频渲染进度] 正在生成动态宣传片 ({model_name})，Task ID: {task_id}")
-
-                poll_url = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
-                return _poll_task(session, poll_url, headers)
-
-            except FreeTierQuotaExhaustedError:
-                # 免费额度耗尽：尝试下一个模型
-                print(f"    [WARN] 模型 {model_name} 免费额度耗尽，切换 fallback...")
-                last_error = FreeTierQuotaExhaustedError(f"{model_name} 额度耗尽")
-                break  # 跳出 schema 循环，尝试下一个模型
-
-            except VideoPollTimeoutError as e:
-                print(f"    [WARN] 模型 {model_name} 轮询超时，切换 fallback: {e}")
-                last_error = e
-                break  # 超时与该模型/schema 无关，直接换下一个模型
-
-            except VideoSchemaMismatchError as e:
-                last_error = e
-                print(f"    [WARN] schema 不匹配，准备切换备用入参结构: {e}")
-                continue
-
-            except Exception as e:
-                last_error = e
-                err_text = str(e)
-                if _contains_schema_error(err_text):
-                    print(f"    [WARN] 捕获到 schema 类错误，准备切换备用入参结构: {err_text}")
-                    continue
-                # 统一的可恢复错误检测：额度/余额/限流/模型不可用 → fallback
-                if _is_recoverable_api_error(err_text):
-                    print(f"    [WARN] 模型 {model_name} 不可用（额度/余额/限流），切换 fallback: {e}")
-                    break
-                raise
-
-    # ── Phase 3: t2v 文生视频兜底（仅用 prompt，无首帧图）──
-    # 当所有 i2v 模型不可用，且调用方未提供首帧图时，退化为纯文生视频。
-    if not image_url:
-        print("    [INFO] 无首帧图，降级到 t2v 文生视频链")
-        t2v_chain = [env_model] + _T2V_MODEL_CHAIN if env_model else _T2V_MODEL_CHAIN
-        for model_name in t2v_chain:
-            print(f"    [视频渲染] 尝试 t2v 模型: {model_name}")
-            payload = _build_payload_t2v(
-                model_name, prompt, negative_prompt=_MOTION_NEGATIVE_PROMPT)
-            try:
-                task_id = _submit_task(session, _I2V_ENDPOINT, headers, payload)
-                print(f"    [视频渲染进度] 正在文生视频 ({model_name})，Task ID: {task_id}")
-                poll_url = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
-                return _poll_task(session, poll_url, headers)
-            except FreeTierQuotaExhaustedError:
-                print(f"    [WARN] t2v {model_name} 免费额度耗尽，切换...")
-                last_error = FreeTierQuotaExhaustedError(f"{model_name} 额度耗尽")
-                continue
-            except VideoPollTimeoutError as e:
-                print(f"    [WARN] t2v {model_name} 轮询超时，切换: {e}")
-                last_error = e
-                continue
-            except Exception as e:
-                err_text = str(e)
-                if _is_recoverable_api_error(err_text):
-                    print(f"    [WARN] t2v {model_name} 不可用: {e}")
-                    last_error = e
-                    continue
-                raise
+    # ── 即梦 Free 兜底：百炼全链失败后，若配置了 session 则白嫖即梦免费视频额度 ──
+    # 即梦支持图生视频（首帧）→ 真动态 + 尽量维持角色一致，缓解百炼额度紧张。
+    if get_jimeng_config().get("has_session"):
+        try:
+            print(f"    [视频渲染] 百炼全链失败，兜底走即梦 Free 生视频...")
+            ff = first_frame_path or image_url
+            return jimeng.generate_video(prompt, first_frame_url=ff if ff else None)
+        except Exception as je:
+            print(f"    [WARN] 即梦兜底生视频也失败: {je}")
 
     raise last_error or Exception("所有视频生成模型均不可用，请检查 API Key 和模型额度。")

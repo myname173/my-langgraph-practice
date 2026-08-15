@@ -517,6 +517,12 @@ def stitch_videos(
                 print(f"    [WARN] 跳过空 URL (镜头 {i+1})")
                 continue
 
+            # 【修复】二级防御：本地占位黑场文件（make_placeholder_clip 产物，文件名含
+            # "placeholder"）直接跳过，不拼入成片，避免上游漏标 shot_failed 时黑屏漏入。
+            if isinstance(url, str) and os.path.isfile(url) and "placeholder" in os.path.basename(url).lower():
+                print(f"    ⏭️ 镜头 {i+1} 为本地占位黑场，跳过（二级防御，避免黑屏）")
+                continue
+
             temp_file = os.path.join(temp_dir, f"temp_scene_{i:02d}.mp4")
             cached_file = os.path.join(clips_cache_dir, f"scene_{i:02d}.mp4")
 
@@ -607,6 +613,7 @@ def stitch_videos(
                 fps=24,
                 preset="medium",
                 threads=4,
+                ffmpeg_params=["-movflags", "+faststart"],
                 logger=None
             )
         except Exception as e:

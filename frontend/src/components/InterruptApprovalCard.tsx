@@ -257,7 +257,7 @@ export function InterruptApprovalCard({ payload, busy, onSubmit }: Props) {
             className={`btn btn-${action}`}
             onClick={() => handle(action)}
           >
-            {ACTION_LABEL[action] ?? action}
+            {busy ? "提交中…" : ACTION_LABEL[action] ?? action}
           </button>
         ))}
       </div>

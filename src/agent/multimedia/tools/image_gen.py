@@ -1,9 +1,16 @@
 # src/agent/multimedia/tools/image_gen.py
 import os
 import time
+import base64
 import requests
 from dotenv import load_dotenv
 from .video_gen import _retry_request, _SUBMIT_TIMEOUT, _POLL_TIMEOUT
+from ..config_loader import get_visual_backend, get_jimeng_config, get_siliconflow_config
+from . import jimeng
+from pathlib import Path as _Path
+
+# 项目根目录：image_gen.py -> tools -> multimedia -> agent -> src -> <root>
+PROJECT_ROOT = _Path(__file__).resolve().parents[4]
 
 load_dotenv()
 
@@ -33,23 +40,32 @@ _TEXT2IMAGE_CHAIN = [
 
 
 def _build_payload(model: str, endpoint_type: str, prompt: str, size: str,
-                   reference_image_url: str = None, ref_strength: float = 1.0,
+                   reference_image_urls: list = None, ref_strength: float = 1.0,
                    negative_prompt: str = "") -> dict:
-    """根据模型类型构建不同的 payload。"""
+    """根据模型类型构建不同的 payload。
+
+    reference_image_urls: 资产下多张参考图（已内联为 base64/data URL 或 http URL），
+    全部注入 messages 做多参考图融合，对齐 Vidu「最多 7 张智能融合」。
+    """
+    ref_urls = reference_image_urls or []
+
+    def _content(ref_list):
+        content_list = []
+        for r in ref_list:
+            if r:
+                content_list.append({"image": r})
+        content_list.append({"text": prompt})
+        return content_list
 
     # ── qwen-image 系列：同步 multimodal messages 格式 ──
     # 与 wan2.x-image 的 messages 结构一致，但不支持 enable_interleave /
     # ref_strength / negative_prompt 等 wan 专有参数，多传会被拒。
     if model.startswith("qwen-image"):
-        content_list = []
-        if reference_image_url:
-            content_list.append({"image": reference_image_url})
-        content_list.append({"text": prompt})
         return {
             "model": model,
             "input": {
                 "messages": [
-                    {"role": "user", "content": content_list}
+                    {"role": "user", "content": _content(ref_urls)}
                 ]
             },
             "parameters": {
@@ -62,15 +78,11 @@ def _build_payload(model: str, endpoint_type: str, prompt: str, size: str,
     # ── wan2.x-image 系列：多模态 messages 格式 ──
     # 覆盖 wan2.6-image / wan2.7-image / wan2.7-image-pro 等带后缀的变体
     if model.startswith("wan2.") and "-image" in model and not model.endswith("-t2i"):
-        content_list = []
-        if reference_image_url:
-            content_list.append({"image": reference_image_url})
-        content_list.append({"text": prompt})
         payload = {
             "model": model,
             "input": {
                 "messages": [
-                    {"role": "user", "content": content_list}
+                    {"role": "user", "content": _content(ref_urls)}
                 ]
             },
             "parameters": {
@@ -79,9 +91,9 @@ def _build_payload(model: str, endpoint_type: str, prompt: str, size: str,
                 "watermark": False,
             }
         }
-        if reference_image_url:
+        if ref_urls:
             payload["parameters"]["enable_interleave"] = False
-        if reference_image_url and ref_strength < 1.0:
+        if ref_urls and ref_strength < 1.0:
             payload["parameters"]["ref_strength"] = ref_strength
         # wan2.7 image models do NOT support negative_prompt (official docs)
         if negative_prompt and not model.startswith("wan2.7"):
@@ -100,8 +112,8 @@ def _build_payload(model: str, endpoint_type: str, prompt: str, size: str,
                 "n": 1,
             }
         }
-        if reference_image_url:
-            payload["input"]["ref_image"] = reference_image_url
+        if ref_urls:
+            payload["input"]["ref_image"] = ref_urls[0]
             payload["parameters"]["ref_mode"] = "repaint"
             payload["parameters"]["ref_strength"] = ref_strength
         if negative_prompt:
@@ -200,17 +212,39 @@ def _is_rate_limit(text: str) -> bool:
                                    "ratequota", "too many requests"))
 
 
-def generate_keyframe(prompt: str, size: str = "2K", reference_image_url: str = None,
-                      ref_strength: float = 1.0, negative_prompt: str = "") -> str:
-    """调用 DashScope 图片生成模型生成关键帧（支持参考图 + 多模型 fallback）
+def generate_keyframe(prompt: str, size: str = "2K", reference_image_urls: list = None,
+                      ref_strength: float = 1.0, negative_prompt: str = "",
+                      thread_id: str = "") -> str:
+    """调用 DashScope 图片生成模型生成关键帧（支持多参考图融合 + 多模型 fallback）
 
     Args:
         prompt: 图片生成提示词
         size: 图片尺寸
-        reference_image_url: 参考图 URL（用于风格/角色一致性）
+        reference_image_urls: 资产下多张参考图 URL 列表（用于角色/道具一致性融合）
         ref_strength: 参考图影响力，0.0-1.0。1.0=强参考（默认），越低越弱
         negative_prompt: 负面提示词，抑制不想要的元素
     """
+    # 归一化为列表（兼容旧调用方传单字符串）
+    ref_urls = reference_image_urls if isinstance(reference_image_urls, list) else (
+        [reference_image_urls] if reference_image_urls else []
+    )
+    # 内联多张参考图为 base64/data URL（即梦与 qwen messages 均需内联）
+    inline_refs = [jimeng._as_inline(u) for u in ref_urls if u]
+
+    # ── 即梦 AI Free 后端分支（白嫖网页版每日免费积分）──
+    # 当 MULTIMODIA_BACKEND == "jimeng" 时，走即梦免费生图（支持多参考图 img2img 融合）。
+    if get_visual_backend() == "jimeng":
+        return jimeng.generate_image(
+            prompt, size=size, reference_image_urls=inline_refs,
+            ref_strength=ref_strength, thread_id=thread_id,
+        )
+
+    # ── SiliconFlow 后端分支（硅基流动，图生图 img2img）──
+    # 当 MULTIMODIA_BACKEND == "siliconflow" 时，用素材参考图作锚点生成本镜头专属首/尾帧。
+    # 与即梦不同：SiliconFlow 直接调用 OpenAI 兼容 images/edits 接口，支持 image[] 参考条件。
+    if get_visual_backend() == "siliconflow":
+        return generate_keyframe_siliconflow(prompt, reference_image_urls=ref_urls, size=size, ref_strength=ref_strength, thread_id=thread_id)
+
     api_key = os.getenv("DASHSCOPE_API_KEY", os.getenv("OPENAI_API_KEY"))
     session = requests.Session()
     session.trust_env = False
@@ -219,7 +253,7 @@ def generate_keyframe(prompt: str, size: str = "2K", reference_image_url: str = 
     size = _normalize_size(size)
 
     # 构建模型链：有参考图时优先用 img2img 链（qwen-image-3.0-pro → qwen-image-3.0 → qwen-image-2.0-pro），最后 fallback 纯文生图
-    if reference_image_url:
+    if inline_refs:
         model_chain = list(_IMG2IMG_CHAIN) + list(_TEXT2IMAGE_CHAIN)
     else:
         model_chain = list(_TEXT2IMAGE_CHAIN)
@@ -255,7 +289,7 @@ def generate_keyframe(prompt: str, size: str = "2K", reference_image_url: str = 
         if not is_sync:
             headers["X-DashScope-Async"] = "enable"
 
-        payload = _build_payload(model, endpoint_type, prompt, size, reference_image_url, ref_strength, negative_prompt)
+        payload = _build_payload(model, endpoint_type, prompt, size, inline_refs, ref_strength, negative_prompt)
 
         print(f"    [画师提交] 尝试模型: {model} ({endpoint_type})")
 
@@ -397,4 +431,151 @@ def generate_keyframe(prompt: str, size: str = "2K", reference_image_url: str = 
                 continue
             raise
 
+    # ── 即梦 Free 兜底：DashScope 全链失败后，若配置了 session 则白嫖即梦额度 ──
+    # 缓解百炼免费额度紧张；即梦支持参考图 img2img（尽力维持角色一致）。
+    if get_jimeng_config().get("has_session"):
+        try:
+            print(f"    [画师提交] DashScope 全链失败，兜底走即梦 Free 生图...")
+            return jimeng.generate_image(
+                prompt, size=size, reference_image_urls=inline_refs,
+                ref_strength=ref_strength, thread_id=thread_id,
+            )
+        except Exception as je:
+            print(f"    [WARN] 即梦兜底生图也失败: {je}")
+
     raise last_error or Exception("所有图片生成模型均不可用，请检查 API Key 和模型额度。")
+
+
+def generate_keyframe_siliconflow(prompt: str, reference_image_urls: list = None,
+                                  size: str = "2K", ref_strength: float = 1.0,
+                                  thread_id: str = "") -> str:
+    """调用 SiliconFlow（硅基流动）OpenAI 兼容 images/generations 接口，用素材参考图作锚点
+    生成本镜头专属首/尾帧（img2img 图生图）。
+
+    与即梦不同：SiliconFlow 直接 post 到 {base_url}/images/generations，模型支持 image 单图
+    作为生成条件（Qwen-Image-Edit 等 image-edit 模型必须带 image 字段）。参考图被当作
+    「风格/构图锚点」，而非直接当首尾帧，符合大厂视频 Agent 把参考图融入生成的做法。
+    返回 base64 data URL，便于下游 Agnes keyframes 与视觉审核直接消费。
+
+    失败抛异常，由上层 fallback/降级处理。同时落盘一份副本供排查。
+
+    注意：SiliconFlow 是云端服务，无法 fetch 本地 URL（如 http://localhost:8900/...），
+    因此所有锚点图都先在本地下载为 base64 data URL 再上传。
+    """
+    cfg = get_siliconflow_config()
+    if not cfg["enabled"]:
+        raise RuntimeError("SiliconFlow 后端未启用：未在 .env 配置 SILICONFLOW_API_KEY")
+
+    ref_urls = reference_image_urls if isinstance(reference_image_urls, list) else (
+        [reference_image_urls] if reference_image_urls else []
+    )
+    # 把锚点图下载为 base64 data URL（云端无法访问本地/远程 URL，必须内联上传）
+    inline_refs = []
+    for u in ref_urls:
+        if not u:
+            continue
+        try:
+            _bytes = _data_url_to_bytes(u)
+            import mimetypes
+            _mime = mimetypes.guess_type(u)[0] or "image/png"
+            inline_refs.append(f"data:{_mime};base64,{base64.b64encode(_bytes).decode('ascii')}")
+        except Exception as e:
+            print(f"    [WARN] SiliconFlow 锚点图下载失败，跳过: {e}")
+
+    px = _SIZE_MAP.get(size, "1024*1024")
+    w, h = (int(x) for x in px.split("*"))
+
+    edit_url = f"{cfg['base_url']}/images/generations"
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+    }
+
+    # 判断当前模型是否为「必须带 image 字段」的 image-edit 类模型（img2img only）。
+    # 这类模型（如 Qwen/Qwen-Image-Edit）不支持纯文生图，无锚点时若仍发请求必 400。
+    _edit_only_models = ("qwen-image-edit", "qwen-image-edit-", "image-edit", "kolors")
+    _is_edit_only = any(m in cfg["image_model"].lower() for m in _edit_only_models)
+
+    # SiliconFlow 图像接口（Qwen-Image-Edit 与 text2img 共用 /images/generations 端点，
+    # 区别仅在于是否带 image 字段）。img2img 时把参考图作为 base64 data URL 传入 image 字段。
+    # 多张参考图：以第一张作主参考（img2img 单图），其余通过 prompt 文本描述锚定风格/身份。
+    _extra = ""
+    if inline_refs:
+        _primary = inline_refs[0]
+        if len(inline_refs) > 1:
+            _extra = "。参考素材还包括：" + "、".join([f"素材图{i+1}" for i in range(1, len(inline_refs))])
+        data = {
+            "model": cfg["image_model"],
+            "prompt": prompt + _extra,
+            "image": _primary,
+            "size": f"{w}x{h}",
+            "n": 1,
+            "response_format": "b64_json",
+        }
+        # strength 控制对原参考图的保留程度（0~1），与即梦 ref_strength 语义一致
+        if ref_strength is not None:
+            data["strength"] = max(0.0, min(1.0, float(ref_strength)))
+        print(f"    [画师提交] SiliconFlow img2img 生图 (模型 {cfg['image_model']}, 参考图 {len(inline_refs)} 张, strength={ref_strength}): {prompt[:60]}...")
+    else:
+        # 无锚点：编辑类模型（img2img only）必须带 image，纯文生图会 400 —— 抛清晰错误让上层降级，
+        # 而不是发一个必败的纯文生图请求。text2img 模型（如 Kolors）仍可正常纯文生。
+        if _is_edit_only:
+            raise RuntimeError(
+                f"SiliconFlow 当前模型 {cfg['image_model']} 为 image-edit 类（需 image 锚点），"
+                f"但本次调用无可用参考图，已停止以免触发 400。建议补充 reference_sheets 锚点或改用 text2img 模型。"
+            )
+        data = {
+            "model": cfg["image_model"],
+            "prompt": prompt,
+            "size": f"{w}x{h}",
+            "n": 1,
+            "response_format": "b64_json",
+        }
+        print(f"    [画师提交] SiliconFlow 纯文生图 (模型 {cfg['image_model']}, 无参考图): {prompt[:60]}...")
+
+    # 落盘目录，便于出错排查
+    out_dir = PROJECT_ROOT / "output" / "keyframes" / (thread_id or "_legacy")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    _max_retry = 2
+    for _attempt in range(_max_retry + 1):
+        try:
+            resp = requests.post(edit_url, headers=headers, json=data, timeout=180)
+        except Exception as e:
+            if _attempt < _max_retry:
+                time.sleep(5 * (_attempt + 1))
+                continue
+            raise RuntimeError(f"SiliconFlow img2img 网络异常: {e}")
+        if 200 <= resp.status_code < 300:
+            try:
+                j = resp.json()
+                _item = (j.get("data") or [{}])[0]
+                b64 = _item.get("b64_json") or _item.get("url")
+                if b64 and b64.startswith("http"):
+                    b64 = base64.b64encode(requests.get(b64, timeout=60).content).decode()
+            except Exception:
+                raise RuntimeError(f"SiliconFlow img2img 返回解析失败: {resp.text[:200]}")
+            if not b64:
+                raise RuntimeError(f"SiliconFlow img2img 返回未含图像: {resp.text[:200]}")
+            out_path = out_dir / f"siliconflow_kf_{int(time.time() * 1000)}.png"
+            with open(out_path, "wb") as f:
+                f.write(base64.b64decode(b64))
+            print(f"    [OK] SiliconFlow img2img 完成: {out_path}")
+            return f"data:image/png;base64,{b64}"
+        # 429 / 5xx 退避重试
+        if (resp.status_code == 429 or 500 <= resp.status_code < 600) and _attempt < _max_retry:
+            time.sleep(5 * (_attempt + 1))
+            continue
+        raise RuntimeError(f"SiliconFlow img2img 返回异常 (HTTP {resp.status_code}): {resp.text[:200]}")
+
+
+def _data_url_to_bytes(data_url: str) -> bytes:
+    """将 data URL 或远程/本地 URL 转成原始 bytes（仅处理 data URL 与内联已下载情形）。"""
+    if data_url.startswith("data:"):
+        _header, _b64 = data_url.split(",", 1)
+        return base64.b64decode(_b64)
+    # 远程/本地文件：直接读取
+    if data_url.startswith("http"):
+        return requests.get(data_url, timeout=60).content
+    with open(data_url, "rb") as f:
+        return f.read()

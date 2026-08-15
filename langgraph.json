@@ -4,5 +4,8 @@
   "graphs": {
     "agent": "src.agent.graph:graph"
   },
+  "checkpointer": {
+    "path": "./src/agent/multimedia/checkpointer.py:create_checkpointer"
+  },
   "env": ".env"
 }

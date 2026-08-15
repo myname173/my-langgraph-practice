@@ -1,7 +1,7 @@
 {
   "character_consistency_threshold": 0.5,
   "max_rewrites": 2,
-  "max_video_gen_failures": 2,
+  "max_video_gen_failures": 8,
   "quality_score": {
     "excellent": 0.8,
     "pass": 0.6,

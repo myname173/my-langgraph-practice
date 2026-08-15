@@ -1,11 +1,26 @@
 # src/agent/multimedia/graph.py
+import sys
 import json
 import os
 import re
+import shutil
+import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+# 根治：在 GBK 等非 UTF-8 控制台下，含 emoji/中文的 print 会抛 UnicodeEncodeError
+# 并静默打断重试/降级逻辑。强制 stdout/stderr 以 UTF-8 容错输出。
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 from langgraph.graph import StateGraph, END
 from langgraph.types import Command, interrupt
+from langchain_core.runnables import RunnableConfig
 
 from .state import MultimediaState
 from . import run_metrics  # 运行指标埋点（可观测性，零依赖，可经 RUN_METRICS_ENABLED 关闭）
@@ -25,11 +40,11 @@ from .tools.text_llm import call_llm
 from .tools.image_gen import generate_keyframe
 from .tools.video_gen import generate_video_from_image, FreeTierQuotaExhaustedError
 from .tools.vision_eval import evaluate_image, evaluate_video, design_camera_movement
-from .tools.video_stitcher import stitch_videos
+from .tools.video_stitcher import stitch_videos, download_video
 # P0 音频闭环：配音 / 字幕 / 混音，全部复用 GitHub 现成组件
 from .tools.tts import generate_voiceover
 from .tools.subtitle import build_srt, burn_subtitles
-from .tools.audio import generate_bgm, mix_audio, resolve_bgm_mood
+from .tools.audio import generate_bgm, mix_audio, resolve_bgm_mood, has_audio_track
 from .visual_context import build_visual_context
 from .shot_strategy import (
     generate_shot_strategy,
@@ -41,7 +56,7 @@ from .cinematic_critic import evaluate_cinematic_quality, format_critic_report, 
 from .film_studio_orchestrator import orchestrate_film_studio
 from .cinematic_memory import reset_memory
 from .rag.retriever import retrieve_rag_context
-from .reference_gen import generate_reference_sheets
+from .reference_gen import generate_reference_sheets, _persist_reference_image
 
 try:
     from .tools.embedding import compute_similarity, get_image_embedding
@@ -76,7 +91,19 @@ from .config_loader import make_placeholder_clip as _make_placeholder_clip
 from .config_loader import persist_studio_output as _persist_studio_output
 
 
-def safe_parse_json(response: str) -> dict:
+def safe_parse_json(response: str, partial: bool = False) -> dict:
+    """解析 LLM 返回的 JSON。
+
+    partial=True 时（用于 showrunner 等带自愈重试的节点）：解析失败不抛异常，
+    而是尽量返回已完整的前缀部分（或空 dict），交由上游重试循环兜底；
+    避免 LLM 输出被截断（超长/超时）时直接 FATAL 拖垮整个流程。
+    """
+    if partial:
+        try:
+            # 优先用 raw_decode 尽力解析截断 JSON 的前缀有效部分（如已完整的 scenes 前缀）
+            return json.JSONDecoder().raw_decode(response.strip())[0]
+        except Exception:
+            pass
     cleaned = response.replace("```json", "").replace("```", "").strip()
     try:
         return json.loads(cleaned)
@@ -94,6 +121,9 @@ def safe_parse_json(response: str) -> dict:
             return json.loads(match.group(0))
         except Exception:
             pass
+    if partial:
+        # 截断兜底：返回空 dict，让 showrunner 的 `if not raw_scenes: continue` 触发重试
+        return {}
     raise Exception(f"总导演未按要求输出有效 JSON 对象！原始输出: {response[:500]}...")
 
 
@@ -410,11 +440,16 @@ def cinematic_critic_node(state: MultimediaState):
     seq_graph = state.get("sequence_graph")
     rewrite_count = state.get("rewrite_count", 0)
     total_scenes = len(state["scenes"])
+    _t0 = time.time()
 
     print(f"\n--- 🔍 [电影评审] 镜头 {idx+1}/{total_scenes} 结构质量评估 (rewrite #{rewrite_count}) ---")
 
     if not shot_plan:
         print("    [!] shot_plan 缺失，跳过评估")
+        run_metrics.record_text_llm_eval(
+            "cinematic_critic", idx, "skip(no shot_plan)",
+            time.time() - _t0, 0, outcome="skip"
+        )
         return {
             "critic_eval": None,
             "quality_gates": None,
@@ -441,6 +476,13 @@ def cinematic_critic_node(state: MultimediaState):
     gates = eval_result.get("gates", {})
     print(f"\n    [*] 综合评分: {eval_result['overall_score']:.2f} ({'PASS' if eval_result['pass_gates'] else 'FAIL'})")
 
+    run_metrics.record_text_llm_eval(
+        "cinematic_critic", idx, "结构质量评估",
+        time.time() - _t0, 0,
+        outcome="PASS" if eval_result["pass_gates"] else "FAIL",
+        score=round(eval_result["overall_score"], 3),
+    )
+
     return {
         "critic_eval": eval_result,
         "quality_gates": gates,
@@ -456,10 +498,15 @@ def director_refine_node(state: MultimediaState):
     idx = state["current_scene_index"]
     scene = state["scenes"][idx]
     critic_eval = state.get("critic_eval")
+    _t0 = time.time()
 
     image_prompt = scene.get("image_prompt", "")
     if not image_prompt:
         print(f"    [!] 无 image_prompt 可精修，跳过")
+        run_metrics.record_text_llm_eval(
+            "director_refine", idx, "skip(no image_prompt)",
+            time.time() - _t0, 0, outcome="skip"
+        )
         return {"scenes": state["scenes"]}
 
     # 如果有评估结果且有建议，执行 LLM 精修
@@ -515,14 +562,24 @@ def director_refine_node(state: MultimediaState):
             prompt += context_block
             print(f"    [*] 已注入 Shot Plan + RAG + Global Setting 上下文")
 
+        _llm_t0 = time.time()
         refined_prompt = call_llm(prompt, "导演精修")
+        _llm_dt = time.time() - _llm_t0
 
         scenes = state["scenes"].copy()
         scenes[idx]["image_prompt"] = refined_prompt
-        print(f"    [*] 精修完成 ({len(refined_prompt)} chars)")
+        print(f"    [*] 精修完成 ({len(refined_prompt)} chars, 耗时 {_llm_dt:.1f}s)")
+        run_metrics.record_text_llm_eval(
+            "director_refine", idx, "导演精修",
+            time.time() - _t0, len(refined_prompt), outcome="refined"
+        )
         return {"scenes": scenes}
     else:
         print(f"    [*] 无精修建议，保持原始 image_prompt")
+        run_metrics.record_text_llm_eval(
+            "director_refine", idx, "passthrough(no suggestions)",
+            time.time() - _t0, 0, outcome="passthrough"
+        )
         return {"scenes": state["scenes"]}
 
 
@@ -545,11 +602,16 @@ def film_studio_node(state: MultimediaState):
     visual_ctx = state.get("visual_context")
     total_scenes = len(state["scenes"])
     global_setting = state.get("global_setting", "")
+    _t0 = time.time()
 
     print(f"\n--- 🎬 [电影工作室] 镜头 {idx+1}/{total_scenes} 多 Agent 协作优化 ---")
 
     if not shot_plan:
         print("    [!] shot_plan 缺失，跳过工作室优化")
+        run_metrics.record_text_llm_eval(
+            "film_studio", idx, "skip(no shot_plan)",
+            time.time() - _t0, 0, outcome="skip"
+        )
         return {"studio_output": None}
 
     if not seq_graph:
@@ -597,6 +659,13 @@ def film_studio_node(state: MultimediaState):
         "debate_count": len(studio_result.get("debate", [])),
         "studio_output_path": studio_output_path,
     }
+
+    run_metrics.record_text_llm_eval(
+        "film_studio", idx, "多Agent协作优化",
+        time.time() - _t0, len(report),
+        outcome="consensus",
+        score=round(studio_result.get("studio_consensus", 0.0), 3),
+    )
 
     return {
         "studio_output": None,             # 剥离大对象，避免随 state 入库
@@ -760,12 +829,15 @@ def showrunner_node(state: MultimediaState):
     global_setting = "无全局设定"
     _MAX_SHOWRUNNER_RETRIES = 2
     for _attempt in range(_MAX_SHOWRUNNER_RETRIES + 1):
-        response = call_llm(prompt, "总导演")
-        parsed_data = safe_parse_json(response)
+        # 显式放大 max_tokens：已精简 prompt（可选字段可省略），但仍需足够空间写完
+        # 6-9 个镜头的 JSON，避免免费额度高峰期因默认 1536 过早截断导致 0 镜头。
+        response = call_llm(prompt, "总导演", max_tokens=2400)
+        # partial=True：截断/非法 JSON 返回空 dict 而非抛异常，交由下方重试循环兜底
+        parsed_data = safe_parse_json(response, partial=True)
         global_setting = parsed_data.get("global_setting", global_setting)
         raw_scenes = parsed_data.get("scenes", [])
         if not raw_scenes:
-            print("    [!] 总导演未返回有效 scenes，重试...")
+            print("    [!] 总导演未返回有效 scenes（可能输出被截断），重试补全...")
             continue
         # 用已解析的 scene 字段做三幕弧线校验
         _probe = [{
@@ -856,7 +928,8 @@ def showrunner_node(state: MultimediaState):
     }
 
 
-def showrunner_review_gate_node(state: MultimediaState):
+def showrunner_review_gate_node(state: MultimediaState, config: dict | None = None):
+    thread_id = (config or {}).get("configurable", {}).get("thread_id", "") if config else ""
     payload = {
         "stage": "showrunner_review",
         "title": "总导演人工审片",
@@ -894,6 +967,11 @@ def showrunner_review_gate_node(state: MultimediaState):
             character_portrait_url = generate_keyframe(
                 portrait_prompt,
                 size="1024*1024",
+                thread_id=thread_id,
+            )
+            # 远程链接（如即梦临时 URL）持久化到本地，避免过期后前端无法显示
+            character_portrait_url = _persist_reference_image(
+                character_portrait_url, thread_id, "characters", "character_portrait"
             )
             print(f"    [OK] Character portrait generated: {character_portrait_url[-50:]}...")
         except Exception as e:
@@ -905,13 +983,14 @@ def showrunner_review_gate_node(state: MultimediaState):
         "global_setting": global_setting,
         "scenes": scenes,
         "character_portrait_url": character_portrait_url,
+        "thread_id": thread_id or state.get("thread_id"),
         "visual_style": state.get("visual_style"),
         "style_suffix": state.get("style_suffix"),
         "style_description": state.get("style_description"),
     }
 
 
-def reference_gen_node(state: MultimediaState):
+def reference_gen_node(state: MultimediaState, config: dict | None = None):
     """
     Reference Sheet Generation Node
     ================================
@@ -922,12 +1001,31 @@ def reference_gen_node(state: MultimediaState):
     """
     print("--- [Reference] Generating consistency reference sheets ---")
 
+    thread_id = (config or {}).get("configurable", {}).get("thread_id", "") if config else ""
     global_setting = state.get("global_setting", "")
     scenes = state.get("scenes", [])
     task = state.get("task", "")
     style = _resolve_style(state)
     style_key = style["style_key"]
     style_suffix = style["style_suffix"]
+
+    # 跳过生成：用户已注入参考图资产（即梦历史图经 AssetLibraryPanel 标注保存为
+    # reference_sheets）。直接复用现有 reference_sheets，省额度且保持角色一致。
+    if state.get("assets_imported"):
+        existing = state.get("reference_sheets") or {}
+        if existing.get("characters") or existing.get("props") or existing.get("environments"):
+            print("    [Asset] 检测到已注入素材，跳过参考图生成，直接复用 reference_sheets")
+            character_portrait_url = state.get("character_portrait_url")
+            if not character_portrait_url and existing.get("characters"):
+                first_char = next(iter(existing["characters"].values()))
+                if first_char:
+                    character_portrait_url = _first_url(first_char.get("urls") or first_char.get("url"))
+            return {
+                "reference_sheets": existing,
+                "character_portrait_url": character_portrait_url,
+                "thread_id": thread_id or state.get("thread_id"),
+                "assets_imported": True,
+            }
 
     try:
         sheets = generate_reference_sheets(
@@ -936,6 +1034,7 @@ def reference_gen_node(state: MultimediaState):
             task=task,
             style_suffix=style_suffix,
             style_key=style_key,
+            thread_id=thread_id,
         )
     except Exception as e:
         print(f"    [WARN] Reference sheet generation failed (non-blocking): {e}")
@@ -945,8 +1044,8 @@ def reference_gen_node(state: MultimediaState):
     character_portrait_url = state.get("character_portrait_url")
     if sheets.get("characters"):
         first_char = next(iter(sheets["characters"].values()))
-        if first_char and first_char.get("url"):
-            character_portrait_url = first_char["url"]
+        if first_char:
+            character_portrait_url = _first_url(first_char.get("url"))
             print(f"    [OK] character_portrait_url updated from turnaround sheet")
 
     # 统计
@@ -958,6 +1057,7 @@ def reference_gen_node(state: MultimediaState):
     return {
         "reference_sheets": sheets,
         "character_portrait_url": character_portrait_url,
+        "thread_id": thread_id or state.get("thread_id"),
     }
 
 
@@ -2099,21 +2199,134 @@ def end_frame_prompt_preview_node(state: MultimediaState):
     return {"scenes": scenes}
 
 
+def _first_url(url):
+    """把 reference entry 的 url 字段（string | list | None）归一为单字符串。
+
+    用于向后兼容旧 checkpoint 中单 url 的资产，以及需要"首张"的场景
+    （如源头角色肖像 character_portrait_url）。
+    """
+    if not url:
+        return None
+    if isinstance(url, list):
+        for u in url:
+            if u:
+                return u
+        return None
+    return url
+
+
+def _to_urls(url):
+    """把 reference entry 的 url 字段（string | list | None）归一为字符串列表。
+
+    一个资产名下多张参考图（如"女主"含正面/侧脸/全身）全部保留，
+    供 _match_reference_elements 返回给 image_gen_node 做多参考图融合注入。
+    """
+    if not url:
+        return []
+    if isinstance(url, list):
+        return [u for u in url if u]
+    return [url]
+
+
+# 命中则为"整张多视图网格图"（turntable / turnaround sheet / 三视图并排等），
+# 仅作离线身份参考，禁止作为视频生成的帧内容注入（遵循 Veo/Runway/Seedance 规范）。
+_REF_TURNAROUND_HINTS = (
+    "turnaround", "turntable", "three-view", "three view", "3-view", "3 view",
+    "model sheet", "reference sheet", "design sheet", "四视图", "三视图", "转面图",
+    "多角度", "views arranged side by side", "multiple views", "side by side",
+)
+
+
+def _is_turnaround_sheet(entry: dict) -> bool:
+    """判断一个 reference_sheets 条目是否为整张多视图网格图（需排除）。
+
+    依据优先顺序：
+      1. 显式 kind == "turnaround"（新规范）；
+      2. description / url 文件名含 turnaround 等关键词（回退）。
+    """
+    if not isinstance(entry, dict):
+        return False
+    kind = entry.get("kind", "")
+    if str(kind).lower() == "turnaround":
+        return True
+    hay = " ".join([
+        str(entry.get("description", "")),
+        str(entry.get("name_cn", "")),
+        str(entry.get("url", "")),
+        str(entry.get("urls", "")),
+    ]).lower()
+    return any(h in hay for h in _REF_TURNAROUND_HINTS)
+
+
+def _filter_reference_images(
+    ref_sheets: dict,
+    portrait_url: str = "",
+    max_refs: int = 2,
+) -> tuple:
+    """排除整张 turnaround/多视图网格图，仅保留角色肖像与道具/环境锚点，限制张数。
+
+    返回：(filtered_url_list, notes_list)
+
+    - characters 类别：仅保留「非 turnaround」的单视图肖像（description 不含网格关键词）；
+      turnaround 整图一律剔除（避免网格残留）。
+    - props / environments：保留（道具/环境单图，无多视图网格风险）。
+    - 源头角色肖像 character_portrait_url 始终保留（最高优先身份锚点）。
+    - 总张数限制为 max_refs（参考 Runway/Seedance「1~2 张参考 + 首尾帧」规范），
+      超量时按「肖像 > 角色单视图 > 道具 > 环境」截断，抑制多图相互竞争导致的构图杂乱/身份漂移。
+    """
+    kept: list = []
+    notes: list = []
+    _cats_order = ("characters", "props", "environments")
+
+    # 1) 源头肖像（最高优先）
+    if portrait_url and portrait_url not in kept:
+        kept.append(portrait_url)
+        notes.append("[Character Consistency] 源头肖像：保持同一角色身份锚点。")
+
+    # 2) 遍历各分类，剔除 turnaround 整图
+    for _cat in _cats_order:
+        for _name, _data in (ref_sheets.get(_cat) or {}).items():
+            if isinstance(_data, dict):
+                if _is_turnaround_sheet(_data):
+                    # 整张多视图网格图：排除（不注入视频生成）
+                    continue
+                _raw = _data.get("urls")
+                if _raw is None:
+                    _raw = _data.get("url")
+                for _u in _to_urls(_raw):
+                    if _u and _u not in kept:
+                        kept.append(_u)
+                if _data.get("description"):
+                    notes.append(f"[{_cat[:-1].title()} '{_name}']: {_data['description']}")
+            elif isinstance(_data, str) and _data and _data not in kept:
+                kept.append(_data)
+
+    # 3) 截断到上限（肖像已在首位，优先保留）
+    if len(kept) > max_refs:
+        print(f"    [*] 参考图 {len(kept)} 张超过上限 {max_refs}，截断（肖像优先）")
+        kept = kept[:max_refs]
+
+    return kept, notes
+
+
 def _match_reference_elements(reference_sheets: dict, script_text: str) -> dict:
     """匹配 reference sheets 中与当前剧本相关的角色/道具/环境。
 
+    一个角色/环境资产可挂多张参考图，匹配命中后返回 **全部 url 列表**，
+    供 image_gen_node 多参考图融合注入，强化角色/场景一致性（对齐 Vidu）。
+
     Returns:
         {
-            "char_url": str or None,
+            "char_urls": list[str] or None,
             "char_desc": str,
             "prop_desc": str,
-            "env_url": str or None,
+            "env_urls": list[str] or None,
             "matched_char_name": str,
             "matched_prop_name": str,
         }
     """
-    result = {"char_url": None, "char_desc": "", "prop_desc": "",
-              "env_url": None, "matched_char_name": "", "matched_prop_name": ""}
+    result = {"char_urls": None, "char_desc": "", "prop_desc": "",
+              "env_urls": None, "matched_char_name": "", "matched_prop_name": ""}
 
     def _check_match(name: str, data: dict) -> bool:
         """通用名称匹配：支持 name_cn + name + 单词级 fallback。"""
@@ -2131,7 +2344,10 @@ def _match_reference_elements(reference_sheets: dict, script_text: str) -> dict:
     # 角色匹配
     for char_name, char_data in reference_sheets.get("characters", {}).items():
         if _check_match(char_name, char_data):
-            result["char_url"] = char_data.get("url") if isinstance(char_data, dict) else char_data
+            _raw = char_data.get("urls") if isinstance(char_data, dict) else None
+            if _raw is None and isinstance(char_data, dict):
+                _raw = char_data.get("url")
+            result["char_urls"] = _to_urls(_raw) if isinstance(char_data, dict) else _to_urls(char_data)
             result["char_desc"] = char_data.get("description", "") if isinstance(char_data, dict) else ""
             result["matched_char_name"] = char_name
             break
@@ -2146,7 +2362,10 @@ def _match_reference_elements(reference_sheets: dict, script_text: str) -> dict:
     # 环境匹配
     for env_name, env_data in reference_sheets.get("environments", {}).items():
         if _check_match(env_name, env_data):
-            result["env_url"] = env_data.get("url") if isinstance(env_data, dict) else env_data
+            _raw = env_data.get("urls") if isinstance(env_data, dict) else None
+            if _raw is None and isinstance(env_data, dict):
+                _raw = env_data.get("url")
+            result["env_urls"] = _to_urls(_raw) if isinstance(env_data, dict) else _to_urls(env_data)
             break
 
     return result
@@ -2157,7 +2376,79 @@ def image_gen_node(state: MultimediaState):
     scene = state["scenes"][idx]
     print(f"--- [Art] [Shot {idx+1}] Rendering keyframe ---")
 
+    # ── 幂等守卫：续跑保留关键帧 ──
+    # 若当前镜头已存在合法首帧（http/data URL/本地文件），说明关键帧已生成，
+    # 续跑（input=None）时直接复用，避免重复消耗生图额度与重画构图。
+    _existing_img = str(scene.get("image_url") or "").strip()
+    if _existing_img and (
+        _existing_img.startswith("http")
+        or _existing_img.startswith("data:image")
+        or _existing_img.startswith("file://")
+        or (len(_existing_img) > 1 and _existing_img[1] == ":" and os.path.isabs(_existing_img))
+    ):
+        print(f"    ⏭️ [Shot {idx+1}] 关键帧已存在，续跑复用（跳过生图）: {_existing_img[:80]}")
+        return {"scenes": state["scenes"]}
+
     scenes = state["scenes"].copy()
+
+    # ── 复用素材库资产（assets_imported）──
+    # 素材参考图(reference_sheets) 本质只是"参考/锚点"，不应直接当首尾帧。
+    # 两种用法：
+    #   A) MULTIMODIA_BACKEND != "siliconflow"：跳过关键帧生图，image_url 留空 →
+    #      video_gen_node 走"无首帧 + 素材参考图"的 Agnes keyframes 模式，不消耗生图额度。
+    #   B) MULTIMODIA_BACKEND == "siliconflow"：用素材参考图作 img2img 锚点，生成本镜头
+    #      专属首/尾帧（SiliconFlow images/edits）。首尾帧是镜头专属构图，素材图仅作风格/身份锚定，
+    #      符合大厂视频 Agent 把参考图融入生成的做法。
+    if state.get("assets_imported"):
+        from .tools.image_gen import get_visual_backend
+        if get_visual_backend() == "siliconflow":
+            # 方案 B：SiliconFlow img2img 生成镜头专属首/尾帧
+            reference_sheets = state.get("reference_sheets") or {}
+            script_text = scene.get("script", "").lower()
+            ref_match = _match_reference_elements(reference_sheets, script_text)
+            # 锚点优先级：匹配角色 > 环境 > 角色肖像 > 全部素材（兜底）
+            anchor_urls = (ref_match.get("char_urls") or ref_match.get("env_urls")
+                           or ([state.get("character_portrait_url")] if state.get("character_portrait_url") else []))
+            if not anchor_urls:
+                _all = []
+                for _cat in ("characters", "props", "environments"):
+                    for _v in (reference_sheets.get(_cat) or {}).values():
+                        if _v and not _is_turnaround_sheet(_v):
+                            _all.append(_first_url(_v.get("urls") or _v.get("url")))
+                anchor_urls = [u for u in _all if u][:3]
+            # 【修复】锚点排除整张 turnaround/多视图网格图，避免转面网格渗入首帧；
+            # 并降低 ref_strength 至 0.35（过高会把网格/设定稿当构图强注入，导致残留与身份漂移）。
+            anchor_urls = [u for u in (anchor_urls or []) if u and not _is_turnaround_sheet({
+                "url": u,
+            })]
+            if anchor_urls:
+                print(f"    [Asset+SiliconFlow] 以 {len(anchor_urls)} 张素材参考图作 img2img 锚点（已排除 turnaround），"
+                      f"生成镜头 {idx+1} 专属首/尾帧...")
+                try:
+                    first_url = generate_keyframe(
+                        scene["image_prompt"],
+                        reference_image_urls=anchor_urls,
+                        ref_strength=0.35,
+                        thread_id=state.get("thread_id", ""),
+                    )
+                    scenes[idx]["image_url"] = first_url
+                    scenes[idx]["last_image_url"] = first_url  # 锚定生成，首尾同源保持镜头内一致
+                    scenes[idx]["iterations"] += 1
+                    print(f"    [OK] 镜头 {idx+1} 首/尾帧已生成(img2img)")
+                    return {"scenes": scenes, "use_first_last_frame": True}
+                except Exception as e:
+                    print(f"    [WARN] SiliconFlow img2img 失败(降级为无首帧模式): {e}")
+            # 降级到方案 A
+            print(f"    [Asset] 复用素材库模式：跳过关键帧生图(镜头 {idx+1})，视频阶段以素材参考图作锚点")
+            scenes[idx].pop("image_url", None)
+            scenes[idx].pop("last_image_url", None)
+            return {"scenes": scenes, "use_first_last_frame": False}
+        # 方案 A（默认）
+        print(f"    [Asset] 复用素材库模式：跳过即梦关键帧生图(镜头 {idx+1})，视频阶段以素材参考图作锚点")
+        # 清空任何残留的首尾帧，确保不会把素材图当作首尾帧注入视频
+        scenes[idx].pop("image_url", None)
+        scenes[idx].pop("last_image_url", None)
+        return {"scenes": scenes, "use_first_last_frame": False}
 
     # ── 选择参考图（reference image）用于 img2img 一致性控制 ──
     # 优先级: 上一场景尾帧(FLF连续性) > 匹配角色参考 > 环境参考 > 无参考
@@ -2182,36 +2473,38 @@ def image_gen_node(state: MultimediaState):
 
     # ── 使用 helper 匹配当前场景涉及的角色/道具/环境 ──
     ref_match = _match_reference_elements(reference_sheets, script_text)
-    matched_char_url = ref_match["char_url"]
+    matched_char_urls = ref_match["char_urls"]
     matched_char_desc = ref_match["char_desc"]
     matched_prop_desc = ref_match["prop_desc"]
     if ref_match["matched_char_name"]:
-        print(f"    [*] Matched character reference: {ref_match['matched_char_name']}")
+        print(f"    [*] Matched character reference: {ref_match['matched_char_name']} ({len(matched_char_urls or [])} ref image(s))")
     if ref_match["matched_prop_name"]:
         print(f"    [*] Matched prop reference: {ref_match['matched_prop_name']}")
 
     if use_flf and prev_end_frame and idx > 0:
         # FLF 模式: 上一场景尾帧 -> img2img 参考 (ref_strength=0.5)
         # 0.5 的平衡点: 保持场景间视觉连续性，同时让导演 prompt 主导构图和景别
-        reference_url = prev_end_frame
+        reference_urls = [prev_end_frame]
         ref_strength = 0.5
         print(f"    [*] FLF mode: using prev scene end frame as img2img reference (ref_strength={ref_strength})")
-    elif matched_char_url:
-        # 匹配到的角色参考图（比固定第一个角色更精准）
-        reference_url = matched_char_url
+    elif matched_char_urls:
+        # 匹配到的角色参考图（多张全部注入做融合，比单张更精准一致）
+        reference_urls = matched_char_urls
         ref_strength = 0.5
-        print(f"    [*] Using matched character reference (ref_strength={ref_strength})")
+        print(f"    [*] Using matched character reference ({len(matched_char_urls)} image(s), ref_strength={ref_strength})")
     elif character_portrait_url:
         # 源头基准兜底：无 FLF 尾帧 / 无匹配角色参考时，用源头角色肖像做 img2img，
         # 保证角色身份对齐源头基准，而非退化为无参考(漂移风险最高)。
-        reference_url = character_portrait_url
+        reference_urls = [character_portrait_url]
         ref_strength = 0.4
         print(f"    [*] Using source character portrait as anchor reference (ref_strength={ref_strength})")
-    elif ref_match["env_url"]:
-        # Fallback: 环境参考图
-        reference_url = ref_match["env_url"]
+    elif ref_match["env_urls"]:
+        # Fallback: 环境参考图（多张融合）
+        reference_urls = ref_match["env_urls"]
         ref_strength = 0.35
-        print(f"    [*] Using environment reference (ref_strength={ref_strength})")
+        print(f"    [*] Using environment reference ({len(ref_match['env_urls'])} image(s), ref_strength={ref_strength})")
+    else:
+        reference_urls = None
 
     # ── 文本增强：在 prompt 中注入角色/道具描述，强化一致性 ──
     enhanced_prompt = scene["image_prompt"]
@@ -2222,7 +2515,7 @@ def image_gen_node(state: MultimediaState):
         identity_anchors.append(f"[Prop Identity Anchor: {matched_prop_desc}]")
     # 角色肖像文本级恒定锚点：即便本帧参考图用的是"上一场景尾帧"(链式)，
     # 也始终提示模型对齐源头角色外观，进一步抑制跨场景漂移。
-    if character_portrait_url and reference_url != character_portrait_url:
+    if character_portrait_url and reference_urls != [character_portrait_url]:
         identity_anchors.append(
             "[Character Consistency: keep the SAME character identity as the "
             "established source portrait — same face, hairstyle, outfit, and equipment.]"
@@ -2231,13 +2524,18 @@ def image_gen_node(state: MultimediaState):
         enhanced_prompt = enhanced_prompt + "\n" + "\n".join(identity_anchors)
         print(f"    [*] Injected {len(identity_anchors)} identity anchor(s) into prompt")
 
+    # 本地关键帧注入标记：当 KEYFRAME_LOCAL_DIR 设置时，jimeng.generate_image 会按
+    # [KF#idx] 定位外部（AI 生图/人工）预生成的镜头关键帧，跳过即梦额度消耗。
+    kf_tag = f" [KF#{idx}]"
     try:
-        if reference_url:
-            image_url = generate_keyframe(enhanced_prompt,
-                                          reference_image_url=reference_url,
-                                          ref_strength=ref_strength)
+        if reference_urls:
+            image_url = generate_keyframe(enhanced_prompt + kf_tag,
+                                          reference_image_urls=reference_urls,
+                                          ref_strength=ref_strength,
+                                          thread_id=state.get("thread_id", ""))
         else:
-            image_url = generate_keyframe(enhanced_prompt)
+            image_url = generate_keyframe(enhanced_prompt + kf_tag,
+                                          thread_id=state.get("thread_id", ""))
     except Exception as e:
         # 生图失败（网络瞬断/接口错误）不再直接 FATAL，改为计入失败计数，
         # 交由路由节点按 MAX_VIDEO_GEN_FAILURES 决定重试或跳过该镜头。
@@ -2308,7 +2606,15 @@ def reviewer_node(state: MultimediaState):
     scenes[idx]["critique"] = feedback
     scenes[idx]["is_perfect"] = _is_review_pass(feedback)
 
-    return {"scenes": scenes}
+    # 审核视觉模型不可用（如免费额度耗尽 403）：记录全局标志，供路由跳过"一致性强制重生"等无效重试
+    reviewer_unavailable = feedback.startswith("REVIEWER_UNAVAILABLE:")
+    if reviewer_unavailable:
+        print("    ⚠️ [审核模型不可用] 后续镜头的一致性强制重生将被跳过（重生也无法提分，避免空耗额度）")
+
+    return {
+        "scenes": scenes,
+        "reviewer_unavailable": reviewer_unavailable or bool(state.get("reviewer_unavailable")),
+    }
 
 
 def image_review_gate_node(state: MultimediaState):
@@ -2506,12 +2812,14 @@ def end_frame_gen_node(state: MultimediaState):
     if end_frame_anchors:
         end_frame_prompt = end_frame_prompt + "\n" + "\n".join(end_frame_anchors)
 
+    scenes = state["scenes"].copy()
     try:
         last_image_url = generate_keyframe(
             end_frame_prompt,
-            reference_image_url=scene["image_url"],
+            reference_image_urls=[scene["image_url"]],
             ref_strength=ref_strength,
             negative_prompt=end_frame_negative,
+            thread_id=state.get("thread_id", ""),
         )
     except Exception as e:
         # 尾帧生图失败不 FATAL，计入失败计数交由路由处理（重试/跳过该镜头）
@@ -2520,7 +2828,6 @@ def end_frame_gen_node(state: MultimediaState):
         return {"scenes": scenes}
     print(f"    [*] 尾帧参考强度: {ref_strength}（{'极低→大差异' if ref_strength <= 0.12 else '偏低→中等差异' if ref_strength <= 0.2 else '中等→保持连续'}）")
 
-    scenes = state["scenes"].copy()
     scenes[idx]["last_image_url"] = last_image_url
     scenes[idx]["last_image_iterations"] += 1
     return {"scenes": scenes}
@@ -2702,6 +3009,22 @@ def videographer_node(state: MultimediaState):
     if cross_scene_context:
         print(f"    [*] Cross-scene context: continuity directives injected")
 
+    # ── 统一文本 qwen 模型所需的视觉锚点与风格上下文（与首尾帧对齐）──
+    # 首帧英文描述（已过 _sanitize_single_frame_prompt + _translate_to_english）
+    # 作为「画面锚点」，弥补文本模型看不到首帧图的缺陷。
+    first_frame_prompt = scene.get("image_prompt", "")
+    last_frame_prompt = scene.get("last_image_prompt", "") if state.get("use_first_last_frame") else ""
+    global_setting = state.get("global_setting", "")
+    style = _resolve_style(state)
+    style_suffix = style.get("style_suffix", "")
+    action_beat = scene.get("action_beat", "")
+    visual_elements = scene.get("visual_elements", []) or []
+    visual_elements_block = (
+        "\n".join(f"- {v}" for v in visual_elements)
+        if visual_elements
+        else "（无额外细节，请从首帧锚点与剧本中自行推断具体可见的动态细节）"
+    )
+
     video_prompt = design_camera_movement(
         scene["image_url"],
         script_for_camera,
@@ -2709,6 +3032,13 @@ def videographer_node(state: MultimediaState):
         critique=scene.get("video_critique", "无"),
         camera_context=camera_context,
         cross_scene_context=cross_scene_context,
+        image_prompt=first_frame_prompt,
+        global_setting=global_setting,
+        style_suffix=style_suffix,
+        action_beat=action_beat or "（无，请从 script 与首帧锚点中推断主体可见动作）",
+        visual_elements=visual_elements_block,
+        first_frame_prompt=first_frame_prompt,
+        last_frame_prompt=last_frame_prompt,
     )
     print(f"    [*] 运镜提示词: {video_prompt}")
 
@@ -2717,16 +3047,114 @@ def videographer_node(state: MultimediaState):
     return {"scenes": scenes}
 
 
-def video_gen_node(state: MultimediaState):
+def video_gen_node(state: MultimediaState, config: RunnableConfig | None = None):
     idx = state["current_scene_index"]
     scene = state["scenes"][idx]
     print(f"--- 🎞️ [镜头 {idx+1}] 动画师生成原片 ---")
 
+    # 按 thread_id 隔离 clips 目录，避免多次运行相互覆盖导致前端“张冠李戴”
+    thread_id = ""
+    if config:
+        thread_id = (config.get("configurable") or {}).get("thread_id", "") or ""
+    base_output = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output")
+    if thread_id:
+        clips_dir = os.path.join(base_output, "clips", thread_id)
+    else:
+        clips_dir = os.path.join(base_output, "clips")
+    os.makedirs(clips_dir, exist_ok=True)
+
     scenes = state["scenes"].copy()
+
+    # 【修复】守卫：resume / 改写后运行等路径可能绕过 image_gen 与路由守卫，
+    # 使空的 image_url 直接进入本节点，提交 DashScope 时报 'Field required: input.media'。
+    # 此处复用"跳过该镜头"机制，不影响其他正常镜头与整体流程。
+    img_url = scene.get("image_url", "")
+    # 【修复-A】t2v 默认链不吃首帧图，关键帧图失败/缺失不应连累视频出片。
+    # 仅当 image_url 既非空、又非 http、也非 data URL、也非本地文件时才跳过；
+    # 为空则走 t2v 无图兜底。
+    # 注意：部分后端可能返回 base64 data URL（data:image/...;base64,...），
+    # 以及可能的本地绝对路径，二者均可作为首帧使用，不能判为"非法"而跳过。
+    _img_url_str = str(img_url).strip()
+    _is_data_url = _img_url_str.startswith("data:image")
+    _is_local_file = _img_url_str.startswith("file://") or (
+        len(_img_url_str) > 1 and _img_url_str[1] == ":" and os.path.isabs(_img_url_str)
+    )
+    if _img_url_str and not (_img_url_str.startswith("http") or _is_data_url or _is_local_file):
+        print(f"    ⏭️ [镜头 {idx+1}] 首帧图非法（非 http/data URL/本地文件），跳过视频生成")
+        scenes[idx]["video_gen_failures"] = scenes[idx].get("video_gen_failures", 0) + 1
+        scenes[idx]["video_is_perfect"] = False
+        scenes[idx]["raw_video_url"] = ""
+        scenes[idx]["final_video_url"] = ""
+        scenes[idx]["video_critique"] = "SKIP: 首帧图非法，跳过视频生成"
+        return {
+            "scenes": scenes,
+            "aborted": False,
+            "abort_reason": None,
+            "error_log": f"镜头 {idx+1} 首帧图非法，已跳过视频生成",
+        }
+
+    # 【修复】部分后端返回 base64 data URL 作为首帧图，需解码为本地 png
+    # 文件再传给视频生成（图生视频 / 本地渲染均接受本地文件路径）。
+    # 这样既复用已生成的关键帧（保证首帧一致），又不破坏"首帧校验"语义。
+    _first_frame_path: str = ""
+    if _is_data_url:
+        import base64 as _b64
+        try:
+            _header, _b64data = _img_url_str.split(",", 1)
+            _png_bytes = _b64.b64decode(_b64data)
+            _first_frame_path = os.path.join(clips_dir, f"scene_{idx:02d}_firstframe.png")
+            with open(_first_frame_path, "wb") as _ff:
+                _ff.write(_png_bytes)
+            print(f"    [*] 首帧 data URL 解码为本地文件: {_first_frame_path} ({len(_png_bytes)}B)")
+        except Exception as _e:
+            print(f"    [WARN] 首帧 data URL 解码失败，改无图兜底: {_e}")
+            _first_frame_path = ""
+    elif _is_local_file:
+        _first_frame_path = _img_url_str.replace("file://", "", 1) if _img_url_str.startswith("file://") else _img_url_str
+    # 若首帧是远程 http，则仍交给底层视频生成链决定是否下载（t2v 不吃首帧，i2v 会下载）
 
     try:
         last_url = scene.get("last_image_url", "") if state.get("use_first_last_frame") else ""
-        raw_video_url = generate_video_from_image(scene["image_url"], scene["video_prompt"], last_url)
+
+        # ── 素材参考图融入视频生成（agnes 多图 keyframes / 其他后端 prompt 锚点）──
+        # 【修复】排除整张 turnaround/多视图网格图（仅作离线身份参考，禁止作为帧内容注入，
+        # 否则多视图网格会残留在画面里），仅保留角色肖像 + 道具/环境锚点，限制 1~2 张，
+        # 遵循 Veo/Runway/Seedance「参考图作身份锚点、禁止网格入帧」规范，抑制身份漂移与构图杂乱。
+        _portrait = state.get("character_portrait_url")
+        _sheets = state.get("reference_sheets") or {}
+        _ref_imgs, _ref_notes = _filter_reference_images(_sheets, _portrait, max_refs=2)
+        if _portrait:
+            _ref_notes.append("[Character Consistency] Keep the SAME character identity as the established source portrait — same face, hairstyle, outfit, equipment.")
+        _ref_note = "\n".join(_ref_notes)
+        if _ref_imgs:
+            print(f"    [*] 注入 {len(_ref_imgs)} 张素材参考图到视频生成（已排除 turnaround 多视图网格）")
+
+        # t2v 无图兜底：image_url 为空时仍调用，由 generate_video_from_image 内部走 t2v 链
+        raw_video_url = generate_video_from_image(
+            img_url, scene["video_prompt"], last_url,
+            first_frame_path=_first_frame_path, thread_id=thread_id,
+            reference_images=_ref_imgs, reference_note=_ref_note,
+        )
+
+        # 【修复】DashScope 返回的是临时远程 URL（有时效/防盗链），前端 <video> 直接播放会报
+        # “没有找到支持的视频格式和 mime 类型”。这里在产出后立即下载到本地（按 thread 隔离的目录），
+        # 并将 final_video_url/raw_video_url 改写为本地绝对路径，由静态服务器以正确 MIME 提供。
+        # 注：部分后端直接返回本地 mp4 路径（非 URL），此时跳过网络下载，直接落盘复用。
+        local_path = None
+        try:
+            local_path = os.path.join(clips_dir, f"scene_{idx:02d}.mp4")
+            if os.path.isfile(raw_video_url):
+                # 已是本地文件（本地渲染后端）：复制到统一 clips 目录
+                shutil.copyfile(raw_video_url, local_path)
+                raw_video_url = local_path
+                print(f"    💾 镜头 {idx+1} 视频已本地落盘（免费后端）: {local_path}")
+            elif download_video(raw_video_url, local_path):
+                raw_video_url = local_path
+                print(f"    💾 镜头 {idx+1} 视频已本地化: {local_path}")
+            else:
+                print(f"    ⚠️ 镜头 {idx+1} 视频本地化失败，回退使用远程 URL: {raw_video_url}")
+        except Exception as dl_err:
+            print(f"    ⚠️ 镜头 {idx+1} 视频本地化异常（回退远程 URL）: {dl_err}")
 
         # 仅在成功产出后递增质量重试计数（用于审片不通过时的重生循环上限）
         scenes[idx]["video_iterations"] = scenes[idx].get("video_iterations", 0) + 1
@@ -2738,18 +3166,37 @@ def video_gen_node(state: MultimediaState):
         return {"scenes": scenes, "aborted": False, "abort_reason": None}
 
     except FreeTierQuotaExhaustedError as e:
-        # 配额/余额耗尽：所有模型均不可用，属于全局性中止，不再继续后续镜头
+        # 【修复-B】镜头级降级而非全局中止：
+        # 免费额度耗尽时，仅把当前镜头写成占位黑场并标记 shot_failed，
+        # aborted 保持 False、不清 error_log，让后续镜头继续出片、已生成镜头保全。
         msg = str(e)
-        print(f"    ⛔ [配额中止] {msg}")
+        print(f"    ⛔ [镜头 {idx+1} 额度耗尽·降级] {msg} -> 占位黑场继续后续镜头")
+
+        duration = float(scene.get("duration", 2.0) or 2.0)
+        placeholder = _make_placeholder_clip(
+            duration=duration,
+            idx=idx,
+            out_path=os.path.join(clips_dir, f"scene_{idx:02d}.mp4"),
+            label=f"镜头 {idx + 1}\n视频额度耗尽 · 已跳过",
+        )
         scenes[idx]["raw_video_url"] = ""
-        scenes[idx]["final_video_url"] = ""
+        scenes[idx]["final_video_url"] = placeholder or ""
         scenes[idx]["video_is_perfect"] = False
-        scenes[idx]["video_critique"] = "FAIL: " + msg
+        scenes[idx]["shot_failed"] = True
+        scenes[idx]["video_critique"] = "QUOTA_FAIL: " + msg
+        # 记录额度耗尽镜头（供 run_full_video.py 摘要如实报告）
+        quota_exhausted = list(state.get("quota_exhausted_scenes") or [])
+        if idx not in quota_exhausted:
+            quota_exhausted.append(idx)
+        run_metrics._event(
+            "video_quota_exhausted", scene_index=idx, degraded=True, placeholder=bool(placeholder)
+        )
         return {
             "scenes": scenes,
-            "aborted": True,
-            "abort_reason": msg,
-            "error_log": msg,
+            "aborted": False,
+            "abort_reason": None,
+            "quota_exhausted_scenes": quota_exhausted,
+            "error_log": f"镜头 {idx+1} 视频额度耗尽（已降级占位）: {msg}",
         }
 
     except Exception as e:
@@ -2769,6 +3216,8 @@ def video_gen_node(state: MultimediaState):
             placeholder = _make_placeholder_clip(
                 duration=duration,
                 idx=idx,  # 按镜头索引命名，避免多镜头覆盖
+                out_path=os.path.join(clips_dir, f"scene_{idx:02d}.mp4"),
+                label=f"镜头 {idx + 1}\n生成失败 · 已跳过",
             )
             if placeholder:
                 scenes[idx]["final_video_url"] = placeholder
@@ -2820,7 +3269,15 @@ def video_reviewer_node(state: MultimediaState):
     scenes[idx]["video_critique"] = feedback
     scenes[idx]["video_is_perfect"] = _is_review_pass(feedback)
 
-    return {"scenes": scenes}
+    # 视频审核模型不可用（如免费额度耗尽 403）：记录全局标志，供路由跳过依赖 VLM 的无效重试
+    reviewer_unavailable = feedback.startswith("REVIEWER_UNAVAILABLE:")
+    if reviewer_unavailable:
+        print("    ⚠️ [视频审核模型不可用] 后续镜头的视频审片重试将被跳过（仅作占位保底，不空耗额度）")
+
+    return {
+        "scenes": scenes,
+        "reviewer_unavailable": reviewer_unavailable or bool(state.get("reviewer_unavailable")),
+    }
 
 
 def video_review_gate_node(state: MultimediaState):
@@ -3154,11 +3611,17 @@ def abort_node(state: MultimediaState):
     return {"error_log": reason, "aborted": True, "abort_reason": reason}
 
 
-def stitcher_node(state: MultimediaState):
+def stitcher_node(state: MultimediaState, config: RunnableConfig | None = None):
     print("\n--- 🎬 [剪辑师] 正在将所有镜头拼接成最终宣传片 ---")
     video_urls = []
     skipped = []
     for i, scene in enumerate(state["scenes"]):
+        # 【修复】shot_failed 镜头（额度耗尽/生成失败写入的深灰占位片）不再拼入成片，
+        # 否则成片出现"黑屏"。改为直接跳过，由相邻成功镜头经转场自然衔接，消除黑屏观感。
+        if scene.get("shot_failed"):
+            skipped.append(i + 1)
+            print(f"    ⏭️ 镜头 {i + 1} 标记为 shot_failed（占位片），跳过不拼入成片（避免黑屏）")
+            continue
         url = scene.get("final_video_url", "")
         if url:
             video_urls.append(url)
@@ -3174,6 +3637,21 @@ def stitcher_node(state: MultimediaState):
 
     if skipped:
         print(f"    [*] 将拼接 {len(video_urls)}/{len(state['scenes'])} 个镜头（跳过: {skipped}）")
+
+    # 成片按 thread_id 隔离，避免多次运行互相覆盖导致前端“张冠李戴”
+    thread_id = ""
+    if config:
+        thread_id = (config.get("configurable") or {}).get("thread_id", "") or ""
+    output_filename = ""
+    if thread_id:
+        # 仓库根：graph.py 位于 <root>/src/agent/multimedia/，需上溯 4 层
+        base_output = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+            "output",
+        )
+        thread_clips = os.path.join(base_output, "clips", thread_id)
+        os.makedirs(thread_clips, exist_ok=True)
+        output_filename = os.path.join(thread_clips, "FINAL_成片.mp4")
 
     # ── 提取转场数据（基于各场景的叙事功能 beat，做跨场景语义衔接）──
     # 说明：state["sequence_graph"] 是「单个场景内部」的镜头关系图，不能直接当作
@@ -3198,9 +3676,20 @@ def stitcher_node(state: MultimediaState):
     if non_hardcut:
         print(f"    [*] 跨场景转场: {len(non_hardcut)} 个效果转场（基于叙事节拍语义匹配）")
 
-    # ── 动态文件名 ──
-    task = state.get("task", "")
-    output_filename = ""  # 空字符串让 stitch_videos 自动生成
+    # ── 成片路径：严格按 thread_id 隔离，避免不同任务互相覆盖导致前端“张冠李戴” ──
+    # 注意：上方已基于 thread_id 算出 output_filename（output/clips/<thread_id>/FINAL_成片.mp4），
+    # 这里【绝不能】再把它重置为空，否则 stitch_videos 会把成片落到项目根目录/通用位置，
+    # 写回 checkpoint 的路径也会错，最终历史页就会串片。
+    if not output_filename:
+        # 兜底：极端情况下拿不到 thread_id，仍按任务+时间戳隔离，绝不写通用文件名
+        task = state.get("task", "")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        slug = re.sub(r"[^\w\u4e00-\u9fff]", "", (task or "video")[:20])
+        output_filename = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "output", "clips", f"{slug}_{ts}", "FINAL_成片.mp4",
+        )
+        os.makedirs(os.path.dirname(output_filename), exist_ok=True)
 
     try:
         final_movie_path, valid_indices, segment_durations = stitch_videos(
@@ -3229,6 +3718,9 @@ def audio_mixer_node(state: MultimediaState):
     复用现成组件：edge-tts(TTS) / pysrt(SRT) / 预置曲库 BGM / moviepy(烧录+混音)。
     - enable_audio=False 时整阶段跳过（前端总开关）。
     - 若无声成片缺失则直接跳过，保证图不崩。
+    - prefer_native_audio=True 且成片自带原生音轨时（如即梦 Seedance 1.5 Pro
+      音画一体），优先保留原生音轨，仅烧录字幕，跳过本地 TTS 配音 / BGM 混音；
+      若成片无原生音轨则自动回退到本地 TTS + BGM 混音兜底，保证有声音。
     """
     # 总开关：前端可关闭整个音频闭环
     if not state.get("enable_audio", True):
@@ -3240,7 +3732,30 @@ def audio_mixer_node(state: MultimediaState):
         print("\n--- 🔊 [音频师] 无成片，跳过音频合成 ---")
         return {}
 
+    # ── 原生音轨优先分支：保留即梦等模型生成的原生音轨，仅烧录字幕 ──
+    prefer_native = bool(state.get("prefer_native_audio", False))
+    has_native = has_audio_track(final_movie)
+    if prefer_native and has_native:
+        print("\n--- 🔊 [音频师] 检测到原生音轨，采用「原生音轨优先」模式 ---")
+        srt_path = build_srt(state["scenes"])
+        try:
+            with_subs = burn_subtitles(final_movie, srt_path)
+        except Exception as e:
+            print(f"    [WARN] 字幕烧录失败（保留原生音轨，跳过字幕）: {e}")
+            with_subs = final_movie
+        print(f"    ✓ 已保留生成视频原生音轨（字幕: {os.path.basename(srt_path)}）")
+        # 运行指标埋点：任务成功出片（可观测性）
+        run_metrics.finalize_run("ok", with_subs)
+        return {
+            "subtitle_path": srt_path,
+            "final_movie_with_audio": with_subs,
+            "final_movie_path": with_subs,
+            "native_audio_kept": True,
+        }
+
     print("\n--- 🔊 [音频师] 正在为成片叠加配音、字幕与配乐 ---")
+    if prefer_native and not has_native:
+        print("    [*] 已开启原生音轨优先，但成片无原生音轨，自动回退本地 TTS 配音 + BGM")
     voice_role = state.get("voice_role") or "xiaoxiao"
 
     # 1) 汇总分镜台词作为旁白文本
@@ -3286,6 +3801,7 @@ def audio_mixer_node(state: MultimediaState):
             "subtitle_path": srt_path,
             "bgm_path": bgm_path,
             "final_movie_with_audio": final_with_audio,
+            "final_movie_path": final_with_audio,
         }
     except Exception as e:
         print(f"    ❌ 音频合成失败: {e}")
@@ -3308,7 +3824,15 @@ def decide_image_quality(state: MultimediaState):
         CHARACTER_CONSISTENCY_THRESHOLD, scene.get("script", "")
     )
     portrait_sim = scene.get("portrait_similarity")
-    if (
+    # 【优化】审核视觉模型不可用时（如免费额度耗尽 403），embedding 一致性判定不可靠、
+    # 且重生也无法提分（VLM 无法复核），强行重生只会空耗图像额度。直接跳过一致性强制重生。
+    if state.get("reviewer_unavailable"):
+        if portrait_sim is not None and portrait_sim < threshold:
+            print(
+                f"    ℹ️ [镜头 {idx+1}] 角色一致性偏低 (肖像相似度 {portrait_sim:.3f} < {threshold:.3f})，"
+                f"但审核模型不可用，跳过无效重生，直接放行"
+            )
+    elif (
         passed
         and threshold > 0
         and portrait_sim is not None
@@ -3343,7 +3867,7 @@ def decide_end_frame_quality(state: MultimediaState):
     return "end_frame_director"
 
 def decide_after_video_generation(state: MultimediaState):
-    # 配额耗尽属于全局中止
+    # 配额耗尽属于全局中止（仅限真实全局错误，单镜头额度耗尽已降级为占位且 aborted=False）
     if state.get("aborted"):
         return "abort"
 
@@ -3353,6 +3877,12 @@ def decide_after_video_generation(state: MultimediaState):
     # 生成成功 → 进入审片
     if scene.get("raw_video_url"):
         return "video_reviewer"
+
+    # 【修复-B】镜头级降级（额度耗尽/shot_failed 已写入占位黑场）：不再重试，
+    # 直接跳过审片推进后续镜头，由 stitcher 把占位镜头一并拼入成片保全。
+    if scene.get("shot_failed") and scene.get("final_video_url"):
+        print(f"    ⏭️ [镜头 {idx+1}] 已降级（占位黑场），跳过审片推进后续镜头")
+        return "skip"
 
     # 单镜头生成失败：未达上限则重试生成，达到上限则跳过该镜头继续后续
     if scene.get("video_gen_failures", 0) < MAX_VIDEO_GEN_FAILURES:
@@ -3403,6 +3933,11 @@ def decide_video_quality(state: MultimediaState):
     idx = state["current_scene_index"]
     scene = state["scenes"][idx]
     if scene["video_is_perfect"] or scene["video_iterations"] >= 3:
+        return "advance_scene"
+    # 【优化】审核模型不可用时，视频审片"不通过"源于接口异常而非真实质量问题，
+    # 重试 videographer 只会空耗视频额度（且仍会因 403 不通过）。直接放行保底。
+    if state.get("reviewer_unavailable"):
+        print(f"    ℹ️ [镜头 {idx+1}] 视频审片未通过，但审核模型不可用，跳过视频重生直接放行")
         return "advance_scene"
     return "videographer"
 
@@ -3616,15 +4151,15 @@ workflow.add_edge("abort", END)
 workflow.add_edge("stitcher", "audio_mixer")
 workflow.add_edge("audio_mixer", END)
 
-# LangGraph API（langgraph dev / cloud）由平台自动接管持久化，不允许自定义
-# checkpointer，否则启动时直接 GraphLoadError。本地脚本/测试则保留自定义
-# SqliteSaver 以获得读写并发健壮性。通过 LANGGRAPH_API 环境变量区分。
+# 无论本地脚本还是 LangGraph API（langgraph dev / cloud）模式，都使用同一份 SqliteSaver
+# 持久化层：本地模式直接在 compile 传入；平台模式则通过 langgraph.json 的
+# checkpointer.path 字段声明 create_checkpointer 工厂注入（平台不允许在 compile()
+# 中直接传自定义 checkpointer，否则 GraphLoadError）。两者复用 ./data/
+# multimedia_checkpoints.sqlite，因此前端能列出并恢复本地跑一半的历史会话。
 import os as _os
 
-# LangGraph API（langgraph dev / cloud）由平台自动接管持久化，不允许自定义
-# checkpointer，否则启动时直接 GraphLoadError。本地脚本/测试则保留自定义
-# SqliteSaver 以获得读写并发健壮性。
-# 通过 .env 中的 LANGGRAPH_API_MODE=1 显式声明运行在 LangGraph API 模式下。
+# .env 中的 LANGGRAPH_API_MODE=1 用于区分运行模式：平台模式下不在此处传 checkpointer，
+# 而交由平台按 langgraph.json 的 checkpointer 配置注入。
 _RUNNING_UNDER_LANGGRAPH_API = bool(_os.getenv("LANGGRAPH_API_MODE"))
 
 if _RUNNING_UNDER_LANGGRAPH_API:

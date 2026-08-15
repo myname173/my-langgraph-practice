@@ -21,6 +21,7 @@ class MultimediaState(TypedDict):
     voice_role: Optional[str]                # 配音音色 key（见 tts.EDGE_TTS_VOICES_ZH）
     enable_audio: Optional[bool]             # 音频闭环总开关（前端控制，默认开启）
     bgm_mood: Optional[str]                  # BGM 情绪标签（如 ambient/tense/upbeat）
+    prefer_native_audio: Optional[bool]      # 原生音轨优先（即梦等模型自带声音时，跳过本地TTS/BGM混音，仅烧字幕）
     
     # 新增：是否启用首尾帧双控模式
     use_first_last_frame: bool
@@ -98,6 +99,22 @@ class MultimediaState(TypedDict):
     reference_images: List[str]
     reference_embeddings: List[List[float]]
 
+    # 当前运行所属 thread_id（由入口注入，用于把参考图等中间产物
+    # 按 thread 隔离落盘到 output/reference_sheets/<thread_id>/，
+    # 即使即梦等远程临时 URL 过期，前端也能通过 /media 稳定访问）
+    thread_id: Optional[str]
+
+    # 用户已注入参考图资产（即梦历史图经前端 AssetLibraryPanel 标注并保存为
+    # reference_sheets）。为真时 reference_gen_node 跳过重新生成，直接复用现有
+    # reference_sheets，避免重复消耗即梦/百炼额度且保持角色/武器/场景一致。
+    assets_imported: Optional[bool]
+
     # 任务控制
     aborted: bool
     abort_reason: Optional[str]
+
+    # 视频免费额度耗尽降级的镜头索引列表（供最终摘要如实报告，避免全局中止浪费已生成产物）
+    quota_exhausted_scenes: Optional[List[int]]
+
+    # 审核视觉模型是否不可用（如免费额度耗尽 403）：不可用时应跳过"一致性强制重生"等依赖 VLM 的无效重试
+    reviewer_unavailable: Optional[bool]

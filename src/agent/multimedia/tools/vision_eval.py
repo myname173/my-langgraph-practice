@@ -146,7 +146,8 @@ def evaluate_image(
 
         print(f"    ⚠️ [审核员接口异常] {str(e)[:200]}")
         print("    转为人工审核（不再自动放行）")
-        return f"FAIL: Reviewer API error — please manually check this image. Error: {str(e)[:150]}"
+        # 返回统一标记：审核模型不可用（如免费额度耗尽 403），供上游跳过"一致性强制重生"等无效重试
+        return f"REVIEWER_UNAVAILABLE: Reviewer API error — please manually check this image. Error: {str(e)[:150]}"
 
 
 def evaluate_video(
@@ -212,7 +213,8 @@ def evaluate_video(
 
         print(f"    ⚠️ [视频审核员接口异常] {str(e)[:200]}")
         print("    转为人工审核（不再自动放行）")
-        return f"FAIL: Video reviewer API error — please manually check this clip. Error: {str(e)[:150]}"
+        # 返回统一标记：审核模型不可用（如免费额度耗尽 403），供上游跳过无效重试
+        return f"REVIEWER_UNAVAILABLE: Video reviewer API error — please manually check this clip. Error: {str(e)[:150]}"
 
     finally:
         if tmp_path and os.path.exists(tmp_path):
@@ -229,9 +231,45 @@ def design_camera_movement(
     critique: str = "无",
     camera_context: str = "",
     cross_scene_context: str = "",
+    **context: str,
 ) -> str:
-    """调用全模态模型设计运镜。"""
-    system_msg = prompt_template.format(script=script, critique=critique or "无")
+    """设计视频运镜/运动提示词。
+
+    由全模态模型改为复用 `text_llm.call_llm`（文本 qwen fallback 链，带超时/重试/
+    多模型切换），并把输出上限提到 1536（对齐首尾帧的导演角色）。由于文本模型
+    看不到首帧图，调用方需通过 `context` 注入首帧英文描述 `image_prompt` 作为
+    「画面锚点」，并注入 global_setting / style_suffix / action_beat / visual_elements
+    / first_frame_prompt / last_frame_prompt 等上下文，以弥补视觉缺失。
+
+    Args:
+        image_url: 首帧图 URL（单帧 i2v 模式），仅作日志/兜底展示，不再喂给多模态。
+        script: 场景剧本。
+        prompt_template: 视频 prompt 模板（含 ``{script}``/``{critique}`` 等占位符）。
+        critique: 上一轮视频审核反馈。
+        camera_context: 景别/动作焦点等摄影参数上下文。
+        cross_scene_context: 跨场景连续性上下文。
+        **context: 模板所需的其他上下文（image_prompt/global_setting/style_suffix/
+            action_beat/visual_elements/first_frame_prompt/last_frame_prompt 等）。
+
+    Returns:
+        纯英文视频 motion prompt；异常时返回一个保守兜底运镜描述。
+    """
+    from .text_llm import call_llm
+
+    # 用画面锚点 + 风格上下文补齐文本模型缺失的视觉信息
+    fill = dict(
+        script=script or "",
+        critique=critique or "无",
+        image_prompt=context.get("image_prompt", ""),
+        global_setting=context.get("global_setting", ""),
+        style_suffix=context.get("style_suffix", ""),
+        action_beat=context.get("action_beat", "（无，请从 script 与首帧锚点中推断主体可见动作）"),
+        visual_elements=context.get("visual_elements", ""),
+        first_frame_prompt=context.get("first_frame_prompt", context.get("image_prompt", "")),
+        last_frame_prompt=context.get("last_frame_prompt", ""),
+        environment_anchor=context.get("environment_anchor", ""),
+    )
+    system_msg = prompt_template.format(**fill)
 
     # Inject camera context (shot distance, action focus, angle)
     if camera_context:
@@ -242,22 +280,8 @@ def design_camera_movement(
         system_msg += f"\n\n{cross_scene_context}"
 
     try:
-        response = client.chat.completions.create(
-            model=os.getenv("DASHSCOPE_OMNI_MODEL", "qwen3.5-omni-plus-2026-03-15"),
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                        {"type": "text", "text": system_msg}
-                    ]
-                }
-            ],
-            temperature=0.7,
-            max_tokens=256
-        )
-        return str(response.choices[0].message.content or "").strip()
-
+        # 显式 1536，与首尾帧导演角色对齐；文本 qwen 链自带 fallback/重试
+        return call_llm(system_msg, "摄影师", max_tokens=1536).strip()
     except Exception as e:
         print(f"    ⚠️ [摄影师接口异常] {str(e)}")
         return "Slow pan right, cinematic lighting, highly detailed."

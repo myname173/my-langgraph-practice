@@ -24,6 +24,16 @@ export default defineConfig({
         target: MEDIA_TARGET,
         changeOrigin: true,
       },
+      // 历史会话恢复接口（src/agent/multimedia/history_api.py），与 /media 同源转发
+      "/history": {
+        target: MEDIA_TARGET,
+        changeOrigin: true,
+      },
+      // 素材上传 / 应用接口（src/agent/multimedia/static_server.py 的 assets_router），与 /media 同源转发
+      "/assets": {
+        target: MEDIA_TARGET,
+        changeOrigin: true,
+      },
     },
   },
 });

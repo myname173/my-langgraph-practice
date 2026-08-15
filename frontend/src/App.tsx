@@ -1,10 +1,15 @@
 import { useCallback, useState } from "react";
 import { useAgentStream } from "./hooks/useAgentStream";
 import { TaskLauncher } from "./components/TaskLauncher";
+import { QuickGeneratePanel } from "./components/QuickGeneratePanel";
 import { ThreadSidebar } from "./components/ThreadSidebar";
 import { NodeProgressTimeline } from "./components/NodeProgressTimeline";
 import { InterruptApprovalCard } from "./components/InterruptApprovalCard";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SceneGallery } from "./components/SceneGallery";
+import { TimelineBar } from "./components/TimelineBar";
+import { ReferenceSheetsPanel } from "./components/ReferenceSheetsPanel";
+import { AssetLibraryPanel } from "./components/AssetLibraryPanel";
 import { FinalMoviePlayer } from "./components/FinalMoviePlayer";
 import type { ReviewDecision, RunInput } from "./types";
 
@@ -24,8 +29,12 @@ export default function App() {
     interrupt,
     timeline,
     error,
+    pendingNodes,
+    actionMode,
     startRun,
     resumeRun,
+    continueRun,
+    rerunFrom,
     loadThread,
     stop,
   } = useAgentStream();
@@ -44,9 +53,15 @@ export default function App() {
   const handleDecision = useCallback(
     async (decision: ReviewDecision) => {
       await resumeRun(decision);
+      setRefreshKey((k) => k + 1);
     },
     [resumeRun],
   );
+
+  const handleContinue = useCallback(async () => {
+    await continueRun();
+    setRefreshKey((k) => k + 1);
+  }, [continueRun]);
 
   return (
     <div className="app">
@@ -86,18 +101,54 @@ export default function App() {
 
         <div className="content-grid">
           <div className="left-col">
+            <QuickGeneratePanel />
             <TaskLauncher busy={busy} onStart={(i) => void handleStart(i)} />
 
-            {interrupt && (
-              <InterruptApprovalCard
-                payload={interrupt}
-                busy={busy}
-                onSubmit={(d) => void handleDecision(d)}
-              />
+            {actionMode === "review" && (
+              <ErrorBoundary label="审核卡片">
+                <InterruptApprovalCard
+                  payload={interrupt!}
+                  busy={busy}
+                  onSubmit={(d) => void handleDecision(d)}
+                />
+              </ErrorBoundary>
             )}
 
-            <FinalMoviePlayer state={state} />
-            <SceneGallery state={state} />
+            {actionMode === "continue" && (
+              <div className="resume-panel">
+                <div className="resume-info">
+                  <strong>该会话尚未跑完</strong>
+                  <span>
+                    下一步：{pendingNodes.join(" → ")}
+                    {typeof state.current_scene_index === "number" &&
+                    state.scenes?.length
+                      ? ` · 进度 ${Math.min(
+                          state.current_scene_index + 1,
+                          state.scenes.length,
+                        )}/${state.scenes.length} 镜头`
+                      : ""}
+                  </span>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  disabled={busy}
+                  onClick={() => void handleContinue()}
+                >
+                  继续执行
+                </button>
+              </div>
+            )}
+
+            <AssetLibraryPanel threadId={threadId} />
+
+            <div className="product-zone">
+              <ErrorBoundary label="产物区">
+                <FinalMoviePlayer state={state} />
+                <TimelineBar state={state} busy={busy} onRerun={(i) => void rerunFrom(i)} />
+                <SceneGallery state={state} />
+                <ReferenceSheetsPanel state={state} />
+              </ErrorBoundary>
+            </div>
           </div>
 
           <div className="right-col">

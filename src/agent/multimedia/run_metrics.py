@@ -102,6 +102,25 @@ def record_scene_outcome(idx: int, kind: str, detail: str = "") -> None:
     _event("scene_outcome", scene_index=idx, kind=kind, detail=detail)
 
 
+def record_text_llm_eval(node: str, scene_index: int, role: str, duration_s: float,
+                         out_chars: int, outcome: str = "", score: Any = None) -> None:
+    """文本 LLM 评估节点可观测埋点：记录节点名、镜头号、LLM 角色、耗时、输出字符数、结论。
+    node ∈ {cinematic_critic, film_studio, director_refine, visual_context, shot_strategy,
+            sequence_orchestrator, director, end_frame_director, showrunner}
+    """
+    fields: Dict[str, Any] = {
+        "node": node,
+        "scene_index": scene_index,
+        "role": role,
+        "duration_s": round(duration_s, 3),
+        "out_chars": out_chars,
+        "outcome": outcome,
+    }
+    if score is not None:
+        fields["score"] = score
+    _event("text_llm_eval", **fields)
+
+
 def finalize_run(outcome: str, final_movie_path: str = "") -> None:
     """收尾节点 / abort 节点调用：落盘当前 run。"""
     global _current

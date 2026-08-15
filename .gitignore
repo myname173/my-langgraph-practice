@@ -237,3 +237,11 @@ workspace/_*.py
 workspace/_*.txt
 workspace/ck_*.py
 workspace/ck_*_out.txt
+start_cat_vlog.ps1
+workspace/cancel_run.py
+workspace/check_2025.py
+workspace/do_rerun_from.py
+workspace/inspect_ckpt_fields.py
+workspace/list_channels.py
+workspace/read_scenes_head.py
+workspace/verify_state.py

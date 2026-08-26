@@ -108,3 +108,38 @@ python scripts/eval_swebench.py --offline-report reports/base_proxy.json reports
 > `resolved_rate`。面试讲评测时，应明确区分两者，并以云端 live 模式（或官方 SWE-bench
 > harness）产出的 `resolved_rate` 作为最终结论。
 
+---
+
+## 实测评估结果（2026-08-25，已验证可复现）
+
+### 训练产出
+- 基座：deepseek-ai/deepseek-coder-7b-instruct
+- 方法：4bit + LoRA（rank16 / alpha32 / dropout0.05），cutoff_len=2048，3 epoch
+- 数据：235 条 SWE-bench issue 成功轨迹（ShareGPT）
+- 资源：Colab T4（14.5G），约 80 min，最终 **train_loss = 0.80**
+- 权重：LoRA 适配器 `llamafactory_runs/sft_v1/model/`（已备份至 Drive `MyDrive/sft_v1/model`）
+
+### 评估方法与结论
+**指标：agent 动作合规率**（输出含 `Action:` 且 `ActionInput` 为可解析 JSON）。
+在同分布 held-out 20 条（seed=42）上，BASE vs FT 对比：
+
+| 模型 | agent 动作合规率 | 典型输出 |
+|------|----------------|---------|
+| BASE（基座） | **0.0**（20/20 均为自然语言应答） | `It seems like you're looking to enhance the bulk_update()...` |
+| FT（微调后） | **1.0**（20/20 正确输出结构化动作） | `Action:analyze_issue ActionInput:{"instance_id":"django__django-14559","repo":"django/django"}` |
+
+**结论**：微调将模型从「闲聊式 LLM」对齐为「可驱动 SWE agent 的协议遵循模型」——
+基座完全不会按 agent 协议输出工具调用，微调后 100% 正确输出 `Action+JSON` 并提取 `instance_id/repo`。
+
+### 关键踩坑（评估可信性前提）
+1. **推理必须套 chat template**：直接 `tok(prompt)` 会让模型回声输入，BASE/FT 输出一致，
+   导致早期 `rubric composite`（BASE 0.453 / FT 0.446）为**假象**，不可作结论。
+   修正为 `tok.apply_chat_template(...)` + 截断只取新生成部分 + `max_new_tokens=768` 后得到真实差异。
+2. **权重必须备份到 Drive**：曾因仅备份测试集导致权重丢失、被迫重训；
+   本次已备份 `MyDrive/sft_v1/model`（`adapter_model.safetensors` ~160MB + `adapter_config.json`）。
+3. **T4 显存约束**：重训需 `quantization_bit: 4` + batch=1 + 串行加载释放，否则 OOM。
+
+### 复现评估命令（Colab）
+见 `docs/EVAL_AND_RESUME_PLAN.md` 第 3 节（推理 C + 评估 D），核心为：
+加载 BASE 与 FT 适配器 → 各生成 20 条 → `is_agent_action()` 统计合规率。
+

@@ -6,14 +6,15 @@
 /** 后端 _normalize_action 支持的动作 */
 export type ReviewAction = "approve" | "rewrite" | "edit_prompt";
 
-/** graph.py 中 6 个人审关卡的 stage 标识 */
+/** graph.py 中人工审核关卡的 stage 标识 */
 export type InterruptStage =
   | "showrunner_review"
   | "prompt_preview"
   | "end_frame_prompt_preview"
   | "image_review"
   | "end_frame_review"
-  | "video_review";
+  | "video_review"
+  | "draft_review";
 
 /** interrupt payload 的公共字段 */
 interface BaseInterruptPayload {
@@ -90,13 +91,20 @@ export interface VideoReviewPayload extends BaseInterruptPayload {
   motion_hint?: string;
 }
 
+/** 成片草稿审片（stitcher 之后、audio_mixer 之前的无声粗剪确认） */
+export interface DraftReviewPayload extends BaseInterruptPayload {
+  stage: "draft_review";
+  video_url: string;
+}
+
 export type InterruptPayload =
   | ShowrunnerReviewPayload
   | PromptPreviewPayload
   | EndFramePromptPreviewPayload
   | ImageReviewPayload
   | EndFrameReviewPayload
-  | VideoReviewPayload;
+  | VideoReviewPayload
+  | DraftReviewPayload;
 
 /**
  * resume 时回传给后端的决策对象。
@@ -135,7 +143,20 @@ export interface SceneLike {
   embedding_similarity?: number | null;
   portrait_similarity?: number | null;
   continuity_score?: number | null;
+  /** stitcher 回写的真实片段时长（秒），即该镜头视频实际长度 */
+  video_duration?: number | null;
   [key: string]: unknown;
+}
+
+/** 单条字幕条目（后端 parse_srt_to_entries 产出，对齐 subtitle.py） */
+export interface SubtitleEntry {
+  index: number;
+  /** 起始时间（秒） */
+  start: number;
+  /** 结束时间（秒） */
+  end: number;
+  /** 字幕文本（已去除换行） */
+  text: string;
 }
 
 /** MultimediaState 中前端关注的子集（见 state.py） */
@@ -156,6 +177,8 @@ export interface MultimediaState {
   reference_images?: string[];
   /** 一致性参考图：{ characters:{name:{url,description,name_cn}}, props:{...}, environments:{...} } */
   reference_sheets?: Record<string, unknown> | null;
+  /** 素材匹配可见化报告：哪些用户参考图被剧本用到、命中几个镜头（见 AssetMatchReport） */
+  asset_match_report?: AssetMatchReport | null;
   rewrite_count?: number;
   studio_summary?: Record<string, unknown> | null;
   critic_eval?: Record<string, unknown> | null;
@@ -166,6 +189,12 @@ export interface MultimediaState {
   bgm_mood?: string | null;
   prefer_native_audio?: boolean;
   native_audio_kept?: boolean;
+  /** 解析后的字幕条目（逐句时间轴），供前端「字幕生成在第几秒」展示 */
+  subtitle_entries?: SubtitleEntry[] | null;
+  /** 配音总时长（秒） */
+  voiceover_duration?: number | null;
+  /** 音频闭环状态：native(原生音轨优先) / dubbed(本地配音混音) / 未跑 */
+  audio_status?: "native" | "dubbed" | null;
   [key: string]: unknown;
 }
 
@@ -187,6 +216,10 @@ export interface RunInput {
   reference_sheets?: ReferenceSheets;
   /** 是否携带外部素材（上传或勾选），置 true 后后端 reference_gen_node 跳过重生图、直接复用。 */
   assets_imported?: boolean;
+  /** 低干预 / 自动模式：为真时后端跳过 6 道人工审核闸口，直接以 approve 放行。 */
+  auto_mode?: boolean;
+  /** 所属故事标识（如 cyber/gull/xianxia），用于素材库按故事隔离；为空时前端回退到 threadId 推断。 */
+  story?: string;
   aborted: boolean;
   final_movie_path: null;
   error_log: null;
@@ -217,6 +250,8 @@ export interface ReferenceEntry {
   urls: string[];
   description: string;
   name: string;
+  /** 所属故事标签（如 xianxia），用于素材来源归类与展示，不影响后端锚定逻辑 */
+  story?: string;
 }
 
 /** reference_sheets 结构：角色 / 道具 / 环境三类参考图 */
@@ -224,6 +259,17 @@ export interface ReferenceSheets {
   characters?: Record<string, ReferenceEntry>;
   props?: Record<string, ReferenceEntry>;
   environments?: Record<string, ReferenceEntry>;
+}
+
+/**
+ * 素材匹配可见化报告（后端 asset_match_report）：
+ *   matched:    { 资产名: 命中镜头数 } —— 该资产名至少在某镜头脚本中出现，并实际参与生图
+ *   unmatched:  string[]            —— 在所有镜头脚本中都搜不到的资产名（极可能静默失效）
+ * 用于给每张用户参考图标「已用于 N 个镜头 / 未命中剧本」徽标，消除名称对不上导致的静默失效。
+ */
+export interface AssetMatchReport {
+  matched?: Record<string, number>;
+  unmatched?: string[];
 }
 
 /** 素材库分类：角色(人物) / 武器(道具) / 场景(环境) / 忽略(不纳入) */
@@ -275,12 +321,15 @@ export interface SelectedAsset {
   url: string;
   /** 展示名（文件名或资产名） */
   name: string;
-  /** 素材分类：角色 / 道具 / 场景（不含 ignore） */
-  category: Exclude<AssetCategory, "ignore">;
+  /** 素材分类：角色 / 道具 / 场景（不含 ignore）。上传图在用户未明确选择前为空串，
+   * 提交时校验，避免道具/场景图被默认误归为「角色」。 */
+  category: Exclude<AssetCategory, "ignore"> | "";
   /** 可选描述，拼入 reference_sheets 的 description */
   description?: string;
   /** 来源标记，便于前端区分上传图与已有图 */
   source: "upload" | "library";
+  /** 故事标签（如 xianxia），继承自建任务时的 story，用于把素材归类为对应故事 */
+  story?: string;
 }
 
 /** 新建任务时收集到的素材选择（上传 + 勾选已有），用于构建 ReferenceSheets。 */

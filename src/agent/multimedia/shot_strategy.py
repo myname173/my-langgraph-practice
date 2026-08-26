@@ -591,6 +591,92 @@ def _fill_shot_details(
 # 6. 镜头计划格式化器
 # ============================================================
 
+# ============================================================
+# 5.5 运动线推导（Motion Line）
+# 为每个镜头注入明确的"动作动词 + 空间位移 + 时长"语义，
+# 解决视频动态少、僵硬的问题。规则推导，零额外 LLM 开销。
+# ============================================================
+
+# 中文动作动词 → 英文动作描述（从剧本 script 提取）
+_MOTION_VERB_MAP: List[tuple] = [
+    ("斩", "severing strike forward"),
+    ("挥剑", "swinging the sword in a wide arc"),
+    ("拔剑", "drawing the blade in one motion"),
+    ("刺", "thrusting forward"),
+    ("跃", "leaping upward / forward"),
+    ("掠", "dashing horizontally at speed"),
+    ("飞", "soaring through the air"),
+    ("冲", "charging forward with force"),
+    ("踏空", "stepping onto mid-air and launching"),
+    ("翻", "spinning / flipping through the air"),
+    ("转", "turning the body around"),
+    ("转身", "whirling to face the new direction"),
+    ("跪", "dropping to one knee"),
+    ("坠", "falling downward"),
+    ("退", "retreating backward"),
+    ("滑", "sliding back across the ground"),
+    ("奔", "sprinting forward"),
+    ("跑", "running at full speed"),
+    ("抬手", "raising the hand"),
+    ("按", "pressing down palm"),
+    ("握", "clenching fist"),
+    ("衣袂", "robes billowing with the motion"),
+    ("灵力", "spiritual energy surging and bursting outward"),
+    ("剑气", "sword-qi slashing across the frame"),
+]
+
+# 位移关键词 → 英文位移描述
+_MOTION_TRAVEL_MAP: List[tuple] = [
+    ("半空", "from the ground up into mid-air"),
+    ("空中", "rising into the air"),
+    ("三丈", "covering three zhang of distance"),
+    ("数丈", "covering several zhang of distance"),
+    ("断崖", "along the cliff edge"),
+    ("山门", "from the mountain gate"),
+    ("阶前", "from the foot of the stairs"),
+    ("向前", "moving forward"),
+    ("向后", "moving backward"),
+    ("横向", "tracking sideways"),
+    ("远", "receding into the distance"),
+    ("近", "closing in toward camera"),
+]
+
+# 运动时长建议（秒），按运动强度
+_MOTION_DURATION_DEFAULT = "8s"
+
+
+def _build_motion_line(shot: Dict[str, Any], script: str) -> str:
+    """
+    为单个 shot 推导 motion line 文本（规则式）。
+    综合：剧本动作动词 + 空间位移 + camera.movement + 建议时长。
+    """
+    script_for_motion = (shot.get("focus_hint", "") or "") + " " + script
+    sl = script_for_motion.lower()
+
+    verbs = [v for kw, v in _MOTION_VERB_MAP if kw in sl]
+    travels = [t for kw, t in _MOTION_TRAVEL_MAP if kw in sl]
+
+    # camera 运动作为兜底动作描述
+    cam_movement = shot.get("camera", {}).get("movement", "slow dolly in")
+
+    if verbs:
+        action_part = ", ".join(verbs[:3])
+    else:
+        action_part = f"camera performs {cam_movement}"
+
+    if travels:
+        travel_part = "; spatial travel: " + ", ".join(travels[:2])
+    else:
+        travel_part = f"; spatial travel: subject shifts within frame as camera does {cam_movement}"
+
+    duration = shot.get("motion_duration", _MOTION_DURATION_DEFAULT)
+    return (
+        f"ACTION: {action_part}"
+        f"{travel_part}"
+        f"; sustain motion across full {duration} clip (no freeze frames, continuous kinetic flow)"
+    )
+
+
 def _format_shot_plan_for_prompt(shot_plan: Dict[str, Any]) -> str:
     """
     将结构化 shot_plan 格式化为导演可读的指令块。
@@ -622,6 +708,8 @@ def _format_shot_plan_for_prompt(shot_plan: Dict[str, Any]) -> str:
         if shot.get("focus_hint"):
             lines.append(f"      Focus Hint: {shot['focus_hint']}")
         lines.append(f"      Lens: {shot['lens_feel']}")
+        if shot.get("motion_line"):
+            lines.append(f"      Motion Line: {shot['motion_line']}")
         if shot.get("transition_preference"):
             lines.append(f"      -> Transition: {shot['transition_preference']}")
         if shot.get("next_shot_hint"):
@@ -642,6 +730,7 @@ def _format_shot_plan_for_prompt(shot_plan: Dict[str, Any]) -> str:
         f"  Lighting: {hero['lighting'].get('full_description', hero['lighting']['setup'])}",
         f"  Emotion target: {hero['emotion']}",
         f"  Focus object: {hero['focus_object']}",
+        f"  Motion Line: {hero.get('motion_line', '')}",
     ])
 
     # 如果剧本中有明确的摄影规格覆盖，显式标注给导演
@@ -765,6 +854,12 @@ def generate_shot_strategy(
 
     # 光照去同质化：基于 emotion/pacing/hero 为每个镜头追加差异化光照修饰
     _diversify_lighting(shots, hero_index)
+
+    # 运动线推导：为每个镜头注入明确的动作/位移/时长语义（规则式，零额外 LLM）
+    for shot in shots:
+        shot["motion_line"] = _build_motion_line(shot, script)
+        shot.setdefault("motion_duration", _MOTION_DURATION_DEFAULT)
+    print(f"    [*] 已为 {len(shots)} 个镜头生成 motion line（运动语义）")
 
     # 从剧本中提取用户指定的摄影机规格，覆盖模板默认值
     camera_overrides = _extract_camera_overrides(script)

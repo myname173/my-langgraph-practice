@@ -194,7 +194,8 @@ def persist_studio_output(studio_result: Dict[str, Any], idx: int) -> str:
     """
     import os as _os
     import time as _time
-    cache_dir = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "data", "studio_cache")
+    # 写入项目根 data/（不在 src/ 内），避免触发 langgraph dev 的 watchfiles reload 循环
+    cache_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(__file__)))), "data", "studio_cache")
     try:
         _os.makedirs(cache_dir, exist_ok=True)
         fname = f"studio_{int(_time.time() * 1000)}_{idx}.json"

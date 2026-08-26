@@ -1,0 +1,8 @@
+$project = 'c:\Users\13682\Desktop\my-langgraph-practice-main'
+$py = 'C:\Users\13682\AppData\Roaming\uv\python\cpython-3.13-windows-x86_64-none\python.exe'
+$site = Join-Path $project '.venv\Lib\site-packages'
+
+$env:PYTHONPATH = $site
+$env:PYTHONDONTWRITEBYTECODE = '1'
+Set-Location $project
+& $py scripts/run_xianxia_real.py > logs_run_test.txt 2>&1

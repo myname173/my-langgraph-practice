@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import type { MultimediaState, SceneLike } from "../types";
+import type { MultimediaState, SceneLike, SubtitleEntry } from "../types";
 import { MediaPreview } from "./MediaPreview";
 import { useImageDim } from "../hooks/useImageDims";
 import { ArtifactLightbox, type LightboxItem } from "./ArtifactLightbox";
 
 interface Props {
   state: MultimediaState;
+  /** 每镜的字幕条目（由 App 层映射好传入），用于卡片内展示本镜字幕时间轴 */
+  subtitleByScene?: Map<number, SubtitleEntry[]>;
 }
 
 type LightboxState =
@@ -18,18 +20,27 @@ function fmtScore(n: number | null | undefined, digits = 2): string {
   return Number(n).toFixed(digits);
 }
 
+function fmtTime(sec: number | null | undefined): string {
+  if (sec == null || Number.isNaN(sec as number)) return "—";
+  const m = Math.floor(sec / 60);
+  const s = (sec as number) - m * 60;
+  return `${String(m).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`;
+}
+
 function SceneCard({
   scene,
   idx,
   active,
   onZoom,
   onCompare,
+  subtitles,
 }: {
   scene: SceneLike;
   idx: number;
   active: boolean;
   onZoom: (item: LightboxItem) => void;
   onCompare: (left: LightboxItem, right: LightboxItem, title: string) => void;
+  subtitles?: SubtitleEntry[];
 }) {
   const [expanded, setExpanded] = useState(active);
   const cardRef = useRef<HTMLElement | null>(null);
@@ -63,6 +74,11 @@ function SceneCard({
           {active && <span className="badge badge-active">执行中</span>}
           {scene.video_is_perfect && <span className="badge badge-perfect">视频已定稿</span>}
           {scene.is_perfect && !scene.video_is_perfect && <span className="badge badge-perfect">关键帧已定稿</span>}
+          {typeof scene.video_duration === "number" && (
+            <span className="badge badge-duration" title="该镜头视频真实时长">
+              ⏱ {fmtTime(scene.video_duration)}
+            </span>
+          )}
         </div>
         <button
           type="button"
@@ -143,6 +159,17 @@ function SceneCard({
             <DetailBlock title="动作节拍（action_beat）" body={scene.action_beat} />
           )}
 
+          {subtitles && subtitles.length > 0 && (
+            <div className="scene-subtitle-block">
+              <DetailBlock
+                title="本镜字幕时间轴"
+                body={subtitles
+                  .map((e) => `${fmtTime(e.start)} – ${fmtTime(e.end)}  ${e.text}`)
+                  .join("\n")}
+              />
+            </div>
+          )}
+
           {hasScores && (
             <div className="score-grid">
               <ScoreChip label="与上一镜头相似度" value={fmtScore(emb)} />
@@ -189,7 +216,7 @@ function ScoreChip({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function SceneGallery({ state }: Props) {
+export function SceneGallery({ state, subtitleByScene }: Props) {
   const scenes = state.scenes ?? [];
   const activeIdx = state.current_scene_index;
   const [lightbox, setLightbox] = useState<LightboxState>(null);
@@ -212,6 +239,7 @@ export function SceneGallery({ state }: Props) {
             scene={scene}
             idx={idx}
             active={activeIdx === idx}
+            subtitles={subtitleByScene?.get(idx)}
             onZoom={(item) => setLightbox({ kind: "single", item })}
             onCompare={(left, right, title) =>
               setLightbox({ kind: "pair", left, right, title })

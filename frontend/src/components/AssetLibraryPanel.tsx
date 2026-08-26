@@ -4,6 +4,9 @@ import type { AssetCategory, AssetItem, AssetsApplyPayload, ReferenceEntry, Refe
 
 interface Props {
   threadId?: string | null;
+  /** 当前任务的故事标识（来自 RunInput.story，如 cyber/gull/xianxia）。
+   *  优先于 threadId 关键字推断，支撑多故事隔离；为空则回退到 threadId 推断。 */
+  story?: string | null;
 }
 
 interface ManifestEntry {
@@ -22,21 +25,32 @@ const CAT_TO_SHEET: Record<Exclude<AssetCategory, "ignore">, "characters" | "pro
   environment: "environments",
 };
 
-/** 读取清单：优先该 thread 目录，空则回退 _legacy（历史即梦图） */
+/** 读取参考图素材库（仅 reference_sheets/library 里用户登记的图，不含 jimeng 关键帧） */
 async function listKeyframes(threadId?: string | null): Promise<{ dir: string; items: { name: string }[] }> {
-  const dirs = threadId ? [`keyframes/${threadId}`, "keyframes/_legacy"] : ["keyframes/_legacy"];
-  for (const dir of dirs) {
-    const r = await fetch(`/media/list?dir=${encodeURIComponent(dir)}`);
-    if (!r.ok) continue;
-    const data = await r.json();
-    if (data.ok && data.count > 0) return { dir, items: data.items };
+  const r = await fetch(`/media/reference_sheets/library/manifest.json`);
+  if (!r.ok) return { dir: "reference_sheets/library", items: [] };
+  try {
+    const arr: ManifestEntry[] = await r.json();
+    // 只展示 source=user 的参考图，关键帧（source=keyframe）不进素材库
+    const items = arr
+      .filter((m) => m.source === "user")
+      .map((m) => {
+        const cat = (m as any).category || "character";
+        return {
+          name: m.filename,
+          url: `/media/reference_sheets/library/${cat}/${m.filename}`,
+          category: cat,
+        };
+      });
+    return { dir: "reference_sheets/library", items: items as { name: string }[] };
+  } catch {
+    return { dir: "reference_sheets/library", items: [] };
   }
-  return { dir: "keyframes/_legacy", items: [] };
 }
 
 async function loadManifest(): Promise<Record<string, ManifestEntry>> {
   try {
-    const r = await fetch("/media/keyframes/_legacy/manifest.json");
+    const r = await fetch("/media/reference_sheets/library/manifest.json");
     if (!r.ok) return {};
     const arr: ManifestEntry[] = await r.json();
     return Object.fromEntries(arr.map((m) => [m.filename, m]));
@@ -45,7 +59,7 @@ async function loadManifest(): Promise<Record<string, ManifestEntry>> {
   }
 }
 
-export function AssetLibraryPanel({ threadId }: Props) {
+export function AssetLibraryPanel({ threadId, story }: Props) {
   const [items, setItems] = useState<AssetItem[]>([]);
   const [manifest, setManifest] = useState<Record<string, ManifestEntry>>({});
   const [wantStory, setWantStory] = useState<string | null>(null);
@@ -65,24 +79,27 @@ export function AssetLibraryPanel({ threadId }: Props) {
       setSaved(false);
       const [list, manifestData] = await Promise.all([listKeyframes(threadId), loadManifest()]);
       if (alive) setManifest(manifestData);
-      // 由 thread_id 推断所属故事（cyber / gull），只展示该故事的已标注即梦图，
-      // 避免两个故事的历史图混在同一素材库；其余渠道产物
-      // 不混入，避免误标并注入 reference_sheets。
-      const wantStory = threadId.includes("gull")
-        ? "gull"
-        : threadId.includes("cyber")
-        ? "cyber"
-        : null;
+      // 优先用显式传入的 story（来自 RunInput.story，支撑多故事如 xianxia），
+      // 回退到 threadId 关键字推断（cyber / gull），只展示该故事的已标注即梦图，
+      // 避免不同故事的历史图混在同一素材库；其余渠道产物不混入。
+      const wantStory = story
+        ? story
+        : threadId?.includes("gull")
+          ? "gull"
+          : threadId?.includes("cyber")
+            ? "cyber"
+            : null;
       if (alive) setWantStory(wantStory);
       const mapped: AssetItem[] = list.items
         .map((it): AssetItem | null => {
           const m = manifest[it.name];
           if (!m) return null;
           if (wantStory && m.story && m.story !== wantStory) return null;
+          const cat = (m as any).category || it.category || "character";
           return {
             filename: it.name,
-            url: `/media/${list.dir}/${it.name}`,
-            category: m.category,
+            url: `/media/reference_sheets/library/${cat}/${it.name}`,
+            category: cat,
             label: m.label ?? it.name,
             description: m.description,
             role_name: m.role_name,
@@ -218,7 +235,7 @@ export function AssetLibraryPanel({ threadId }: Props) {
   return (
     <section className="asset-library">
       <div className="panel-head">
-        <h3>素材资产库</h3>
+        <h3>素材资产库 · 一致性参考源</h3>
         <button
           type="button"
           className={`btn ${saved ? "btn-success" : "btn-primary"}`}
@@ -237,8 +254,9 @@ export function AssetLibraryPanel({ threadId }: Props) {
       </div>
 
       <p className="panel-hint">
-        素材按<b>角色 / 道具 / 场景</b>聚合成资产卡。每张卡可挂多张参考图（如正面 + 三视图），
-        保存后写入本会话参考图资产（reference_sheets），续跑生图时<b>多图融合注入</b>保持一致性，省额度。
+        这里是<b>一致性参考图的素材来源</b>：你在创建任务时上传或勾选的本地/历史图，会先出现在上方上传区，
+        生成关键帧后归入本库。把每张图标好<b>分类（角色 / 道具 / 场景）</b>与<b>角色名</b>，点保存即注入
+        续跑生图的参考图资产（reference_sheets）。<b>保存后到下方「一致性参考图」面板即可看到匹配结果。</b>
       </p>
 
       <div className="asset-group-list">

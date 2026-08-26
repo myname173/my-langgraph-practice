@@ -30,7 +30,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ASSET_DIR = ROOT / "workspace" / "assets"
 MEDIA_BASE = "http://localhost:8900"          # /assets/upload 所在服务
-LG_BASE = "http://localhost:2024"              # LangGraph 图服务
+import os as _os
+LG_BASE = _os.getenv("LG_BASE_URL", "http://localhost:2024")  # LangGraph 图服务（可用环境变量覆盖端口）
 ASSISTANT_ID = "fe096781-5601-53d2-b2f6-0d3403f7e9ca"
 
 # 剧本里对角色/道具/场景的称呼 —— 必须与 reference_sheets 的 key 完全一致

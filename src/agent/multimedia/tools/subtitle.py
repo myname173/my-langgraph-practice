@@ -36,7 +36,8 @@ def build_srt(
     t = 0.0
     idx = 0
     for scene in scenes:
-        text = (scene.get("script") or "").strip()
+        # 仅使用对话/台词字段，不使用分镜剧本(script)作为字幕，避免把镜头描述烧录成字幕
+        text = (scene.get("dialogue") or "").strip()
         if not text:
             continue
         idx += 1
@@ -59,6 +60,31 @@ def build_srt(
         os.close(fd)
     subs.save(out_path, encoding="utf-8")
     return out_path
+
+
+def parse_srt_to_entries(srt_path: str) -> List[Dict[str, Any]]:
+    """把 SRT 解析为可序列化的字幕条目列表，供前端逐句时间轴展示。
+
+    与 build_srt 同源（均用 pysrt），零额外依赖。返回:
+      [{"index": int, "start": float(秒), "end": float(秒), "text": str}, ...]
+    用于前端「字幕生成在第几秒」的可观测性。
+    """
+    try:
+        subs = pysrt.open(srt_path, encoding="utf-8")
+    except Exception as e:
+        print(f"    [WARN] 字幕解析失败（前端时间轴不可用）: {e}")
+        return []
+    entries: List[Dict[str, Any]] = []
+    for sub in subs:
+        entries.append(
+            {
+                "index": sub.index,
+                "start": round(float(sub.start.ordinal) / 1000.0, 3),
+                "end": round(float(sub.end.ordinal) / 1000.0, 3),
+                "text": (sub.text or "").replace("\n", " ").strip(),
+            }
+        )
+    return entries
 
 
 def burn_subtitles(

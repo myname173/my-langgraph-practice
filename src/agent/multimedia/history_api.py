@@ -35,6 +35,7 @@ from typing import Any, Iterable, Optional
 
 import aiosqlite
 import os
+import re
 from fastapi import APIRouter, HTTPException, Query
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -300,12 +301,45 @@ def _to_media_url(path: Any) -> str | None:
     return None
 
 
-def _best_local_video_media(i: int) -> str | None:
-    """返回第 i 个镜头的最佳本地可播视频 /media 路径；无本地文件时返回 None。
+def _scan_thread_clips(thread_id: str) -> dict[int, str]:
+    """扫描 output/clips/<thread_id>/ 下本次流水线的真实分镜产物。
 
-    优先用 output/clips/scene_{i:02d}.mp4（stitcher 缓存），
-    其次用 output/review/shot_{i+1:02d}.mp4（审核片段）。
+    返回 {scene_index(0-based): "/media/clips/<thread_id>/agnes_vid_<ts>.mp4"}。
+    文件名含毫秒时间戳（agnes_vid_<ts>.mp4），按时间升序对应第 0..N-1 镜。
+    仅做单次请求内的轻量扫描（os.listdir + 正则），不写库。
     """
+    if not thread_id:
+        return {}
+    d = os.path.join(_project_root(), "output", "clips", thread_id)
+    if not os.path.isdir(d):
+        return {}
+    pat = re.compile(r"^agnes_vid_(\d+)\.mp4$")
+    hits: list[tuple[int, str]] = []
+    try:
+        for fn in os.listdir(d):
+            m = pat.match(fn)
+            if m:
+                hits.append((int(m.group(1)), fn))
+    except OSError:
+        return {}
+    hits.sort(key=lambda x: x[0])  # 时间戳升序 → 第 0..N-1 镜
+    return {idx: f"/media/clips/{thread_id}/{fn}" for idx, (_, fn) in enumerate(hits)}
+
+
+def _best_local_video_media(
+    i: int, thread_id: str = "", thread_clips: dict[int, str] | None = None
+) -> str | None:
+    """返回第 i 个镜头（0-based）的最佳本地可播视频 /media 路径；无则返回 None。
+
+    优先级：
+      1. output/clips/<thread_id>/agnes_vid_*.mp4（本次 thread 隔离真实产物）；
+      2. output/clips/scene_{i:02d}.mp4（历史兼容 stitcher 缓存）；
+      3. output/review/shot_{i+1:02d}.mp4（历史兼容审核片段）。
+    """
+    if thread_clips is None and thread_id:
+        thread_clips = _scan_thread_clips(thread_id)
+    if thread_clips and i in thread_clips:
+        return thread_clips[i]
     clip = _local_clip_path(i)
     if os.path.isfile(clip):
         return f"/media/clips/scene_{i:02d}.mp4"
@@ -315,23 +349,38 @@ def _best_local_video_media(i: int) -> str | None:
     return None
 
 
-def _localize_history_urls(values: dict) -> None:
+def _localize_history_urls(
+    values: dict, thread_id: str = "", thread_clips: dict[int, str] | None = None
+) -> None:
     """把往期会话里过期/无效的远程视频 URL 改写为本地 /media 路径（就地修改 values）。
 
     仅当本地文件真实存在时才改写，否则保留原值（前端会自行处理无效链接）。
-    覆盖：每个镜头的 final_video_url/raw_video_url，以及顶层 final_movie_path。
+    覆盖：每个镜头的 final_video_url/raw_video_url，以及图片 first_frame_url/image_url。
+    优先用 output/clips/<thread_id>/agnes_vid_*.mp4 真实产物（按 thread 隔离扫描）。
     不触碰数据库，只影响当前响应。
     """
+    if thread_clips is None:
+        thread_clips = _scan_thread_clips(thread_id) if thread_id else {}
     scenes = values.get("scenes")
     if isinstance(scenes, list):
         for i, sc in enumerate(scenes):
             if not isinstance(sc, dict):
                 continue
-            local_media = _best_local_video_media(i)
+            local_media = _best_local_video_media(i, thread_id=thread_id, thread_clips=thread_clips)
             if local_media:
-                for field in ("final_video_url", "raw_video_url"):
-                    if _is_remote(sc.get(field)):
+                # 优先用本线程隔离目录的真实产物（agnes_vid_*.mp4）。
+                # 无条件覆盖：旧产物命名 scene_xx.mp4/shot_xx.mp4 在本线程目录中不存在，
+                # 直接覆盖可避免前端 404（加载失败）；远程链接同理改写。
+                for field in ("final_video_url", "raw_video_url", "video_url"):
+                    if _is_remote(sc.get(field)) or not sc.get(field) or sc.get(field) != local_media:
                         sc[field] = local_media
+            # 图片同样本地化（output/keyframes 或 output/clips/thread_id 下的首帧）
+            for field in ("first_frame_url", "image_url"):
+                cur = sc.get(field)
+                if cur:
+                    m = _to_media_url(cur)
+                    if m:
+                        sc[field] = m
 
 
 async def _build_merged_values(saver: AsyncSqliteSaver, cfg: dict, latest: Any) -> Any:
@@ -417,7 +466,8 @@ async def _build_merged_values(saver: AsyncSqliteSaver, cfg: dict, latest: Any) 
     # 顶层最终成片：严格按 thread_id 隔离，杜绝跨任务“张冠李戴”。
     # 规则（优先级从高到低）：
     #   1) 该任务自己 checkpoint 记录的 final_movie_path（含 final_movie_with_audio）；
-    #   2) 该任务自己的隔离目录 output/clips/<thread_id>/FINAL_成片.mp4；
+    #   2) 该任务自己的隔离目录 output/clips/<thread_id>/FINAL_成片_subs_audio.mp4
+    #      （主成片，带字幕+音轨） / FINAL_成片_subs.mp4（字幕） / FINAL_成片.mp4；
     #   3) 否则 None（前端不显示成片，而不是借用别的任务的通用文件）。
     # 【严禁】使用通用 output/review/FINAL_成片.mp4 兜底——那是旧运行产物，串任务。
     thread_id = (cfg or {}).get("configurable", {}).get("thread_id", "") or ""
@@ -430,11 +480,13 @@ async def _build_merged_values(saver: AsyncSqliteSaver, cfg: dict, latest: Any) 
         if isinstance(fa, str) and fa:
             final_url = _to_media_url(fa)
     if final_url is None and thread_id:
-        own_final = os.path.join(
-            _project_root(), "output", "clips", thread_id, "FINAL_成片.mp4"
-        )
-        if os.path.isfile(own_final):
-            final_url = "/media/clips/" + thread_id + "/FINAL_成片.mp4"
+        own_dir = os.path.join(_project_root(), "output", "clips", thread_id)
+        # 成片命名三变体统一兜底（名称优先级：带音轨 > 字幕 > 纯成片）
+        for name in ("FINAL_成片_subs_audio.mp4", "FINAL_成片_subs.mp4", "FINAL_成片.mp4"):
+            own_final = os.path.join(own_dir, name)
+            if os.path.isfile(own_final):
+                final_url = "/media/clips/" + thread_id + "/" + name
+                break
     base["final_movie_path"] = final_url
 
     # 【修复】顶层“非 scene”业务字段（reference_sheets / assets_imported /
@@ -448,6 +500,24 @@ async def _build_merged_values(saver: AsyncSqliteSaver, cfg: dict, latest: Any) 
                 "thread_id", "task"):
         if key in latest_cv and latest_cv[key] not in (None, "", {}, []):
             base[key] = latest_cv[key]
+
+    # 【修复】若 checkpoint 里 scenes 被 resume/clear 清空（finalize 后常见），但
+    # 磁盘上 output/clips/<thread_id>/agnes_vid_*.mp4 真实存在，则按 thread 隔离目录
+    # 扫描结果重建 scenes 列表，确保详情页能渲染真实分镜、不再“加载失败”。
+    if thread_id and not isinstance(base.get("scenes"), list):
+        base["scenes"] = []
+    if thread_id and len(base.get("scenes") or []) == 0:
+        clips = _scan_thread_clips(thread_id)
+        if clips:
+            base["scenes"] = [
+                {
+                    "index": i,
+                    "final_video_url": url,
+                    "raw_video_url": url,
+                    "video_url": url,
+                }
+                for i, url in clips.items()
+            ]
     return base
 
 
@@ -502,6 +572,23 @@ def _summarize(thread_id: str, values: dict, tup: Any = None) -> dict:
     ):
         current_scene_index = total_scenes - 1
 
+    # 封面：首镜首帧（优先 first_frame_url/image_url 本地化，其次用隔离目录真实产物）。
+    # 缺失则为空串，前端安全渲染（不报错）。
+    cover = ""
+    if isinstance(scenes, list) and scenes:
+        first = scenes[0] if isinstance(scenes[0], dict) else {}
+        for fld in ("first_frame_url", "image_url"):
+            cv = first.get(fld)
+            if cv:
+                m = _to_media_url(cv)
+                if m:
+                    cover = m
+                    break
+    if not cover:
+        clips = _scan_thread_clips(thread_id)
+        if 0 in clips:
+            cover = clips[0]
+
     return {
         "thread_id": thread_id,
         "task": title,
@@ -512,6 +599,7 @@ def _summarize(thread_id: str, values: dict, tup: Any = None) -> dict:
         "has_interrupt": interrupt is not None,
         "next": next_nodes,
         "checkpoint_id": checkpoint.get("id"),
+        "cover": cover,
     }
 
 
@@ -612,6 +700,27 @@ async def list_history_threads(
                 )
                 threads.append(_corrupted_summary(thread_id, type(exc).__name__))
 
+    # 排序：按 updated_at 时间倒序（最新在前）。checkpoints 表的 checkpoint_id
+    # 混用了 UUIDv6（时间戳前缀，字典序≈时间序）与随机 UUIDv4，直接
+    # ``ORDER BY MAX(checkpoint_id) DESC`` 会让旧 thread 因 UUIDv4 前缀而乱序排到
+    # 最前（如 jimeng_*/01a0020f）。改用真实 updated_at（ISO8601）排序，并对
+    # 脏数据（ts 误存为 UUID 字符串 / None）做兜底——无法解析的时间戳沉底，
+    # 保证带真实时间戳的会话（如本次新跑的成片）稳定排在最前、可被用户看到。
+    from datetime import datetime as _dt
+
+    def _sort_key(t: dict):
+        raw = t.get("updated_at")
+        if isinstance(raw, str):
+            try:
+                ts = _dt.fromisoformat(raw.replace("Z", "+00:00"))
+                return (0, -ts.timestamp())
+            except ValueError:
+                # 不可解析（脏 UUID 字符串 / 非 ISO 文本）→ 沉底
+                return (1, 0)
+        return (1, 0)
+
+    threads.sort(key=_sort_key)
+
     return {
         "threads": threads,
         "total": total,
@@ -687,7 +796,7 @@ async def get_history_thread(thread_id: str) -> dict[str, Any]:
     # 临时远程链接（有时效/防盗链），前端直连会报“没有找到支持的视频格式和 mime 类型”。
     # 这里在**只读响应层**做 URL 本地化：若本地 output/clips（或 output/review）对应文件
     # 存在，则改写为本地 /media 路径，前端无需改动即可正常播放。注意：不写数据库。
-    _localize_history_urls(values)
+    _localize_history_urls(values, thread_id=thread_id)
 
     scenes = raw_values.get("scenes")
     total_scenes = len(scenes) if isinstance(scenes, list) else 0

@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AssetCategory, AssetItem, ReferenceEntry, ReferenceSheets } from "../types";
+import type { AssetCategory, AssetItem } from "../types";
 
 type Cat = Exclude<AssetCategory, "ignore">;
+
+/** 分类色板：与 AssetGroupCard / 参考图面板徽标体系保持一致（角色紫 / 道具橙 / 场景绿） */
+const CATEGORY_COLOR: Record<Cat, string> = {
+  character: "#8B5CF6",
+  prop: "#F59E0B",
+  environment: "#22C55E",
+};
 
 interface ManifestEntry {
   filename: string;
@@ -12,24 +19,12 @@ interface ManifestEntry {
   description?: string;
 }
 
-/** 资产分类 → reference_sheets 字段名 */
-const CAT_TO_SHEET: Record<Cat, "characters" | "props" | "environments"> = {
-  character: "characters",
-  prop: "props",
-  environment: "environments",
-};
-
-/** 读取历史素材库（_legacy 即梦图 + manifest 标注）。返回归一化的 AssetItem 列表。 */
+/** 读取参考图素材库（仅 reference_sheets/library 里 source=user 的图）。返回归一化的 AssetItem 列表。 */
 async function loadLibraryItems(): Promise<{ items: AssetItem[]; manifest: Record<string, ManifestEntry> }> {
-  // 历史素材库目录优先 _legacy；若后续扩展多故事可按需追加
-  const r = await fetch(`/media/list?dir=${encodeURIComponent("keyframes/_legacy")}`);
-  if (!r.ok) return { items: [], manifest: {} };
-  const data = await r.json();
-  const files: { name: string }[] = data.ok ? data.items : [];
-
+  // 数据源改为按 manifest 驱动，只展示用户登记的参考图；jimeng 关键帧（source=keyframe）不进入素材库
   let manifest: Record<string, ManifestEntry> = {};
   try {
-    const mr = await fetch("/media/keyframes/_legacy/manifest.json");
+    const mr = await fetch("/media/reference_sheets/library/manifest.json");
     if (mr.ok) {
       const arr: ManifestEntry[] = await mr.json();
       manifest = Object.fromEntries(arr.map((m) => [m.filename, m]));
@@ -38,25 +33,20 @@ async function loadLibraryItems(): Promise<{ items: AssetItem[]; manifest: Recor
     manifest = {};
   }
 
-  const items: AssetItem[] = files
-    .map((it): AssetItem | null => {
-      // 只保留即梦生成的素材（三视图/设定图），过滤其他渠道的历史素材
-      if (!it.name.startsWith("jimeng_")) return null;
-      const m = manifest[it.name];
-      if (m && m.category === "ignore") return null;
-      // 无 manifest 的图也允许选择，默认归为角色，用户可改分类
-      const cat: AssetCategory = m?.category ?? "character";
-      if (cat === "ignore") return null;
+  const items: AssetItem[] = Object.values(manifest)
+    .filter((m) => m.source === "user" && m.category !== "ignore")
+    .map((m): AssetItem => {
+      const cat: AssetCategory = (m.category as AssetCategory) ?? "character";
+      const name = (m.filename as string) ?? "";
       return {
-        filename: it.name,
-        url: `/media/keyframes/_legacy/${it.name}`,
+        filename: name,
+        url: `/media/reference_sheets/library/${m.category}/${name}`,
         category: cat,
-        label: m?.label ?? it.name,
-        description: m?.description,
-        role_name: m?.role_name,
+        label: (m.label as string) ?? name,
+        description: (m.description as string) ?? "",
+        role_name: (m.role_name as string) ?? (m.label as string),
       };
-    })
-    .filter((x): x is AssetItem => x !== null);
+    });
   return { items, manifest };
 }
 
@@ -123,7 +113,11 @@ export function AssetPicker({ selected, onToggle, categoryOverride, onCategoryCh
         {groups.map((g) => {
           const checked = selected.has(g.name);
           return (
-            <label key={g.name} className={`asset-pick-card ${checked ? "is-checked" : ""}`}>
+            <label
+              key={g.name}
+              className={`asset-pick-card ${checked ? "is-checked" : ""}`}
+              style={{ borderLeftColor: CATEGORY_COLOR[g.category] }}
+            >
               <input
                 type="checkbox"
                 checked={checked}
@@ -153,24 +147,4 @@ export function AssetPicker({ selected, onToggle, categoryOverride, onCategoryCh
       </div>
     </div>
   );
-}
-
-/**
- * 由勾选结果构建 reference_sheets（供 TaskLauncher 随 RunInput 透传）。
- * selectedItems 为父组件维护的「资产名 → 该资产首图」映射（含分类）。
- */
-export function buildReferenceSheetsFromPicks(
-  picks: { name: string; category: Cat; urls: string[]; description?: string }[]
-): ReferenceSheets {
-  const sheets: ReferenceSheets = { characters: {}, props: {}, environments: {} };
-  for (const p of picks) {
-    const key = CAT_TO_SHEET[p.category];
-    const entry: ReferenceEntry = {
-      urls: p.urls,
-      description: p.description || p.name,
-      name: p.name,
-    };
-    (sheets[key] as Record<string, ReferenceEntry>)[p.name] = entry;
-  }
-  return sheets;
 }

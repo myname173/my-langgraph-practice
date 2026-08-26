@@ -1,3 +1,0 @@
-[media-server] 托管目录: C:\Users\13682\Desktop\my-langgraph-practice-main\output
-[media-server] 产物地址: http://127.0.0.1:8900/media/<filename>
-[media-server] 历史会话: http://127.0.0.1:8900/history/threads

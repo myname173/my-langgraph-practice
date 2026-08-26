@@ -2,6 +2,7 @@
 """
 即梦 AI Free（jimeng-api）后端封装 — 白嫖即梦网页版每日免费积分（默认 ~66 积分/天）。
 
+
 背景：
   用户希望摆脱百炼免费额度少、API 格式多变（各模型端点/payload 不一致）的麻烦。
   GitHub 上 `hedashuaiii/jimeng-api`（fork 自 `DylanWu92/jimeng-free-api-all`）
@@ -39,17 +40,36 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 # 注意：不要从 video_gen 导入，避免循环依赖（video_gen 已 import 本模块）。
 # 这里自带轻量网络重试，复用项目既有的退避风格。
-def _retry_request(fn, max_retries: int = 3, backoff: list = None, label: str = ""):
+def _retry_request(fn, max_retries: int = 3, backoff: list = None, label: str = "", _check_body: bool = False):
+    """fn 返回 requests.Response。_check_body=True 时，HTTP 200 但响应体含错误码也视为
+    失败并重试（即梦代理常把「积分不足/权益不足」「队列满」等以 HTTP 200 + code=-2001/-1000
+    返回，需当作可重试错误而非成功）。"""
     backoff = backoff or [2, 5, 10]
     last = None
     for i in range(max_retries + 1):
         try:
-            return fn()
-        except Exception as e:  # 网络级异常才重试
+            resp = fn()
+            if _check_body and resp.status_code == 200:
+                # 解析响应体判断是否为代理错误（即梦常把「积分不足/权益不足」以
+                # HTTP 200 + code=-2001/-1000 返回）。仅此解析容错，错误判定必须在 try 之外抛出，
+                # 否则会被下面的 except 吞掉。
+                _d = None
+                try:
+                    _d = resp.json()
+                except Exception:
+                    pass
+                if isinstance(_d, dict):
+                    _code = _d.get("code")
+                    _has_url = bool(_d.get("data") and ("url" in str(_d.get("data"))))
+                    # code 非 0/None 且无图片 URL → 视为错误，抛出以触发重试
+                    if (_code not in (0, None)) and not _has_url:
+                        raise RuntimeError(f"即梦错误码 {_code}: {_d.get('message')}")
+            return resp
+        except Exception as e:  # 网络级异常 或 错误体触发的重试
             last = e
             if i < max_retries:
                 wait = backoff[min(i, len(backoff) - 1)]
-                print(f"    [WARN] 即梦 {label} 网络异常 ({type(e).__name__})，{wait}s 后重试 ({i+1}/{max_retries})...")
+                print(f"    [WARN] 即梦 {label} 重试 ({type(e).__name__}: {str(e)[:60]})，{wait}s 后重试 ({i+1}/{max_retries})...")
                 time.sleep(wait)
                 continue
             raise
@@ -100,7 +120,7 @@ def _round_robin_header() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # 生图
 # ─────────────────────────────────────────────────────────────────────────────
-def generate_image(prompt: str, size: str = "1024x1024",
+def generate_image(prompt: str, size: str = "1920x1080",
                    reference_image_urls: list = None, ref_strength: float = 1.0,
                    timeout: int = 180, thread_id: str = "") -> str:
     """调用即梦生图（OpenAI 兼容 /v1/images/generations）。
@@ -140,27 +160,76 @@ def generate_image(prompt: str, size: str = "1024x1024",
     # 参考图统一为 base64（即梦接口更稳）；多张全部注入 images 做融合
     image_inputs = [_as_inline(u) for u in (reference_image_urls or []) if u]
 
+    # 【修复-A】jimeng 免费接口对 resolution/ratio 取值较敏感；先归一为合法枚举，
+    # 避免非法字符串触发 -2001 invalid parameter（关键帧 img2img 失败的根因之一）。
+    _resolution = str(os.getenv("JIMENG_IMAGE_RESOLUTION", "2k")).strip().lower()
+    if _resolution not in ("1k", "2k", "4k"):
+        _resolution = "2k"
+    _ratio = _size_to_ratio(size)
+    # 【修复-D】img2img（图生图）模式下 2k/4k 分辨率会被代理判定 invalid parameter 并超时，
+    # 实测 1k 稳定返回。纯文生图可保留 2k；仅当带参考图（img2img）时强制降到 1k。
+    _is_img2img = bool(reference_image_urls)
+    if _is_img2img and _resolution != "1k":
+        _resolution = "1k"
+
+    # 【修复-B】使用最新且稳定的模型 jimeng-5.0（本地 jimeng-api 代理支持，且对 img2img +
+    # 本地素材图 URL + resolution=2K 输入实测 2/2 稳定返回真实图片 URL）。代理对模型名存在
+    # 偶发抖动（intermittent -1000 socket disconnected / -2001），因此失败统一走下方退避重试，
+    # 不依赖单一模型名一定成功。jimeng-4.0 / jimeng-4.5 / seedream-5.0 为可用的备选模型。
+    _model = "jimeng-5.0"
+
     payload = {
-        "model": "jimeng-4.5",
+        "model": _model,
         "prompt": prompt,
-        "ratio": _size_to_ratio(size),
-        "resolution": "2k",
+        "ratio": _ratio,
+        "resolution": _resolution,
         "n": 1,
     }
     if image_inputs:
-        # 图生图：images 数组（1-10 张），sample_strength 控制参考强度（近似角色一致）
+        # 图生图：images 数组（1-10 张），sample_strength 控制参考强度（近似角色一致）。
+        # 【修复-E】sample_strength 不能等于 1.0（等于 1.0 传 images 会被代理判 invalid
+        # parameter 并超时）；也不能过低（jimeng 实测 sample_strength < 0.1 会被代理判
+        # invalid parameter -2001，尾帧 ref_strength 低至 0.02/0.03 时必触发）。clamp 到
+        # [0.1, 0.95]：下限 0.1 仍为"低参考→大视觉差异"保留足够自由度，且合法。
+        _ss = max(0.1, min(0.95, ref_strength))
         payload["images"] = image_inputs
-        payload["sample_strength"] = max(0.0, min(1.0, ref_strength))
+        payload["sample_strength"] = _ss
 
     headers = {"Content-Type": "application/json", **_round_robin_header()}
 
     session = requests.Session()
     session.trust_env = False
 
-    def _do_post():
+    # 【修复-B/C】失败策略：优先退避重试（覆盖代理瞬时抖动 / 队列满 / 免费档权益不足）。
+    # 关键：_check_body=True —— 即梦代理常把「积分不足/权益不足」以 HTTP 200 + code=-2001 返回，
+    # 必须当作可重试错误（等免费权益恢复窗口）而非当成功。退避拉长到 8/20/40s 给权益恢复时间。
+    # 不再遇到 -2001 就立刻剥离参考图降级为纯文生图（那会丢失素材锚定，违背用户
+    # "关键帧要基于素材图"的需求）。仅当 img2img 路径持续失败时，才回退纯文生图一次作为保底，
+    # 但纯文生图同样失败则直接抛错，交由 graph 层统一退避重试，而非静默降级为"无首帧"模式。
+    def _post():
         return session.post(url, headers=headers, json=payload, timeout=timeout)
 
-    resp = _retry_request(_do_post, label="即梦生图")
+    resp = _retry_request(_post, max_retries=4, backoff=[8, 20, 40, 60],
+                          label="即梦生图(img2img)" if image_inputs else "即梦生图",
+                          _check_body=True)
+    if resp.status_code != 200 and image_inputs:
+        # 退避重试后仍失败：可能是参考图格式问题，剥离 images 以纯文生图再尝试一次
+        _err = resp.text[:300]
+        print(f"    [WARN] 即梦 img2img 退避重试后仍失败 (HTTP {resp.status_code}): {_err}")
+        print(f"    [WARN] 剥离参考图，纯文生图保底重试一次（保留素材锚定优先，纯文仅兜底）")
+        _txt_payload = {
+            "model": _model,
+            "prompt": prompt,
+            "ratio": _ratio,
+            "resolution": _resolution,
+            "n": 1,
+        }
+        try:
+            resp = _retry_request(lambda: session.post(url, headers=headers, json=_txt_payload, timeout=timeout),
+                                  max_retries=1, label="即梦纯文生图保底", _check_body=True)
+        except Exception as _e:
+            raise RuntimeError(f"即梦生图失败 (img2img 与纯文生图均失败): {_err} | 纯文生图: {_e}")
+
     if resp.status_code != 200:
         raise RuntimeError(f"即梦生图失败 (HTTP {resp.status_code}): {resp.text[:300]}")
 
@@ -171,8 +240,9 @@ def generate_image(prompt: str, size: str = "1024x1024",
     b64 = items[0].get("b64_json") if items else None
 
     import os as _os
-    # 落盘到项目根 output/keyframes/<thread_id>/（无 thread_id 归入 _legacy），按会话隔离
-    out_dir = PROJECT_ROOT / "output" / "keyframes" / (thread_id or "_legacy")
+    # 落盘到项目根 output/keyframes/<thread_id>/（无 thread_id 归入 _generated/），
+    # 关键帧/尾帧只进 keyframes 目录，绝不进 reference_sheets/library（参考图素材库）。
+    out_dir = PROJECT_ROOT / "output" / "keyframes" / (thread_id or "_generated")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"jimeng_kf_{int(time.time() * 1000)}.png"
 
@@ -286,8 +356,8 @@ def generate_video(prompt: str, first_frame_url: str = None,
 
 def _save_video(item: dict, session: requests.Session, timeout: int,
                 thread_id: str = "") -> str:
-    # 落盘到项目根 output/clips/<thread_id>/（无 thread_id 归入 _legacy），按会话隔离
-    out_dir = PROJECT_ROOT / "output" / "clips" / (thread_id or "_legacy")
+    # 落盘到项目根 output/clips/<thread_id>/（无 thread_id 归入 _generated），按会话隔离
+    out_dir = PROJECT_ROOT / "output" / "clips" / (thread_id or "_generated")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"jimeng_vid_{int(time.time() * 1000)}.mp4"
     b64 = item.get("b64_json")
@@ -319,22 +389,38 @@ def _as_inline(url_or_path: str) -> str:
     if url_or_path.startswith("data:"):
         return url_or_path
     if url_or_path.startswith(("http://", "https://")):
-        # localhost / 127.0.0.1 参考图（如本机 static_server 入库素材）无法被即梦
-        # 服务端回源下载，需同机 fetch 后内联为 base64 再下发。
         from urllib.parse import urlparse
         _host = (urlparse(url_or_path).hostname or "").lower()
-        if _host in ("localhost", "127.0.0.1", "::1"):
-            try:
-                import mimetypes
-                import urllib.request as _ur
-                with _ur.urlopen(url_or_path, timeout=30) as _r:
-                    _b = _r.read()
-                _mime = mimetypes.guess_type(url_or_path)[0] or "image/png"
-                return f"data:{_mime};base64,{base64.b64encode(_b).decode('ascii')}"
-            except Exception as _e:
-                print(f"    [WARN] 即梦 localhost 参考图下载失败，回退原值: {_e}")
-                return url_or_path
-        return url_or_path
+        # 即梦服务端无法回源下载任何远程 URL（既包括本机 static_server 的
+        # localhost 图，也包括即梦自身返回的 byteimg 等带签名/跨域的远程 URL）。
+        # 这里统一由本机 fetch 后内联为 base64 再下发，避免 "invalid parameter"(-2001)。
+        try:
+            import mimetypes
+            import urllib.request as _ur
+            req = _ur.Request(url_or_path, headers={"User-Agent": "Mozilla/5.0"})
+            with _ur.urlopen(req, timeout=30) as _r:
+                _b = _r.read()
+            _mime = mimetypes.guess_type(url_or_path)[0] or "image/png"
+            return f"data:{_mime};base64,{base64.b64encode(_b).decode('ascii')}"
+        except Exception as _e:
+            # 媒体静态服务（如 localhost:8900）宕机时，远程下载失败。此时若 URL 指向
+            # 本项目 /media/<rel> 静态资源，直接还原为本地文件（PROJECT_ROOT/output/<rel>）
+            # 再内联 base64，避免回退成即梦无法回源 fetch 的 localhost URL 而触发 -2001。
+            # 这样 jimeng 关键帧/尾帧不依赖媒体服务器存活，离线锚定素材图。
+            if _host in ("localhost", "127.0.0.1") and "/media/" in url_or_path:
+                _media_rel = url_or_path.partition("/media/")[2]
+                _local = str(PROJECT_ROOT / "output" / _media_rel)
+                try:
+                    _b = open(_local, "rb").read()
+                    _mime = mimetypes.guess_type(_local)[0] or "image/png"
+                    _du = _downscale_inline_if_needed(_b, _mime)
+                    if _du:
+                        return _du
+                    return f"data:{_mime};base64,{base64.b64encode(_b).decode('ascii')}"
+                except Exception as _e2:
+                    print(f"    [WARN] 即梦 localhost 媒体宕机，本地还原 /media/{_media_rel} 也失败: {_e2}")
+            print(f"    [WARN] 即梦远程参考图下载失败({_host})，回退原值: {_e}")
+            return url_or_path
     # 还原 /media/<rel> -> PROJECT_ROOT/output/<rel>
     candidate = url_or_path
     if url_or_path.startswith("/media/"):
@@ -343,9 +429,37 @@ def _as_inline(url_or_path: str) -> str:
     try:
         import mimetypes
         mime = mimetypes.guess_type(candidate)[0] or "image/png"
-        with open(candidate, "rb") as f:
-            b = base64.b64encode(f.read()).decode("ascii")
-        return f"data:{mime};base64,{b}"
+        b = open(candidate, "rb").read()
+        # 【修复-A】即梦免费接口对超大/非标准参考图易报 -2001 invalid parameter。
+        # 内联前将最长边限制到 1024（保持纵横比），转 JPEG，显著降低拒收概率，
+        # 让素材图锚点（img2img）真正生效，消除"关键帧未基于素材图"。PIL 不可用时跳过。
+        data_url = _downscale_inline_if_needed(b, mime)
+        if data_url:
+            return data_url
+        return f"data:{mime};base64,{base64.b64encode(b).decode('ascii')}"
     except Exception as e:
         print(f"    [WARN] 即梦参考图转 base64 失败，回退原值: {e}")
         return url_or_path
+
+
+def _downscale_inline_if_needed(raw: bytes, mime: str, max_edge: int = 1024):
+    """参考图内联前下采样到 max_edge，避免即梦 -2001 invalid parameter。无 PIL 返回 None。"""
+    try:
+        from io import BytesIO
+        from PIL import Image
+    except Exception:
+        return None
+    try:
+        im = Image.open(BytesIO(raw))
+        im = im.convert("RGB")
+        w, h = im.size
+        if max(w, h) <= max_edge:
+            return None
+        scale = max_edge / float(max(w, h))
+        im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+        buf = BytesIO()
+        im.save(buf, format="JPEG", quality=85)
+        return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
+    except Exception as _e:
+        print(f"    [WARN] 即梦参考图下采样失败（跳过）: {_e}")
+        return None

@@ -1,0 +1,2 @@
+cancel err: HTTP Error 404: Not Found
+server /ok: 200

@@ -23,7 +23,7 @@ export function QuickGeneratePanel() {
     setError(null);
     setResult(null);
     try {
-      const resp = await fetch("/media/generate", {
+      const resp = await fetch("/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: prompt.trim(), type }),

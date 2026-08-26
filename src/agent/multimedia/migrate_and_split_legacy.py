@@ -78,7 +78,7 @@ MANIFEST = [
      "description": "海鸥飞翔于夕阳海面的关键帧/场景图"},
 ]
 
-MEDIA_PREFIX = "/media/keyframes/_legacy/"
+MEDIA_PREFIX = "/media/keyframes/_generated/"
 
 
 def _url(name: str) -> str:
@@ -91,7 +91,7 @@ def _migrate_once() -> None:
         src = SRC_OUTPUT / kind
         if not src.exists():
             continue
-        dst = DST_ROOT / kind / "_legacy"
+        dst = DST_ROOT / kind / "_generated"
         dst.mkdir(parents=True, exist_ok=True)
         for f in src.iterdir():
             if not f.is_file():
@@ -109,7 +109,7 @@ def _migrate_once() -> None:
 
 
 def _write_manifest() -> None:
-    dst = DST_ROOT / "keyframes" / "_legacy" / "manifest.json"
+    dst = DST_ROOT / "keyframes" / "_generated" / "manifest.json"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(json.dumps(MANIFEST, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"    [OK] manifest.json 写入 {dst.name}（{len(MANIFEST)} 张图）")

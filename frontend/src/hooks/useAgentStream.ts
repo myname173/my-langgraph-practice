@@ -43,6 +43,8 @@ export function useAgentStream() {
   const [interrupt, setInterrupt] = useState<InterruptPayload | null>(null);
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // 当前 run 是否处于低干预 / 自动模式（用于时间轴标注「自动」审核节点）
+  const [autoMode, setAutoMode] = useState(false);
   /** 历史会话恢复后，图的下一步待执行节点（用于判断能否"继续执行"） */
   const [pendingNodes, setPendingNodes] = useState<string[]>([]);
 
@@ -170,6 +172,7 @@ export function useAgentStream() {
       try {
         const thread = await client.threads.create();
         setThreadId(thread.thread_id);
+        setAutoMode(!!input.auto_mode);
         await consume(thread.thread_id, { input });
         return thread.thread_id;
       } catch (e) {
@@ -332,9 +335,6 @@ export function useAgentStream() {
     return "none";
   }, [interrupt, threadId, pendingNodes.length, status]);
 
-  /** 兼容旧调用点：是否可"继续执行"（无中断且有待执行节点） */
-  const canContinue = actionMode === "continue";
-
   /**
    * 从指定镜头重新跑：先让后端把该 thread 的 checkpoint 重置到目标镜头
    * （current_scene_index + 清空后续产物 + next=advance_scene），再以
@@ -372,6 +372,19 @@ export function useAgentStream() {
     abortRef.current?.abort();
   }, []);
 
+  /** 新建会话：中断当前运行并清空所有会话状态，回到干净的创建态 */
+  const reset = useCallback(() => {
+    abortRef.current?.abort();
+    setThreadId(null);
+    setState({});
+    setInterrupt(null);
+    setTimeline([]);
+    setError(null);
+    setPendingNodes([]);
+    setAutoMode(false);
+    setStatus("idle");
+  }, []);
+
   return {
     threadId,
     status,
@@ -380,7 +393,7 @@ export function useAgentStream() {
     timeline,
     error,
     pendingNodes,
-    canContinue,
+    autoMode,
     actionMode,
     startRun,
     resumeRun,
@@ -388,5 +401,6 @@ export function useAgentStream() {
     rerunFrom,
     loadThread,
     stop,
+    reset,
   };
 }

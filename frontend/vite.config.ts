@@ -34,6 +34,17 @@ export default defineConfig({
         target: MEDIA_TARGET,
         changeOrigin: true,
       },
+      // 快速生成接口（static_server.py 的 POST /generate），与 /media 同源转发
+      "/generate": {
+        target: MEDIA_TARGET,
+        changeOrigin: true,
+      },
+      // 后端健康检查（static_server.py 的 GET /health），同源转发，供开场动画探测
+      "/healthz": {
+        target: MEDIA_TARGET,
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/healthz/, "/health"),
+      },
     },
   },
 });

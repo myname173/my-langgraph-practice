@@ -16,6 +16,8 @@ interface ThreadItem {
   current_scene_index: number;
   status: HistoryStatus;
   has_interrupt: boolean;
+  /** 封面缩略图（首镜首帧 /media URL），可选 */
+  cover?: string;
 }
 
 function formatTime(iso?: string | null): string {
@@ -49,6 +51,7 @@ function fromHistory(t: HistoryThreadSummary): ThreadItem {
     current_scene_index: t.current_scene_index,
     status: t.status,
     has_interrupt: t.has_interrupt,
+    cover: t.cover || undefined,
   };
 }
 
@@ -200,6 +203,17 @@ export function ThreadSidebar({ activeThreadId, onSelect, refreshKey }: Props) {
                     <span className="thread-progress">{progress}</span>
                   )}
                 </span>
+                {t.cover && (
+                  <img
+                    className="thread-cover"
+                    src={t.cover}
+                    alt=""
+                    loading="lazy"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                )}
                 <span className="thread-id">
                   {shortId}
                   {time ? ` · ${time}` : ""}

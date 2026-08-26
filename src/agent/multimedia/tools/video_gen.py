@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from ..config_loader import get_visual_backend, get_jimeng_config
 from . import jimeng
 from . import agnes
+from . import zhipu
 from pathlib import Path as _Path
 
 # 项目根目录：video_gen.py -> tools -> multimedia -> agent -> src -> <root>
@@ -127,7 +128,9 @@ def _build_parameters(
 ) -> dict:
     # 从环境变量读取默认值，允许参数覆盖
     resolution = resolution or os.getenv("VIDEO_RESOLUTION", "1080P")
-    duration = duration or int(os.getenv("VIDEO_DURATION", "5"))
+    # 单镜头默认时长：由 5s 提升至 8s，给运动展开留出时间。
+    # 仍可由环境变量 VIDEO_DURATION 覆盖（如 10），或调用方显式传 duration 覆盖。
+    duration = duration or int(os.getenv("VIDEO_DURATION", "8"))
 
     # wan2.7 系列：不支持 shot_type，使用 ratio 控制画面比例，分辨率上限 720P
     if model_name.startswith("wan2.7"):
@@ -282,8 +285,21 @@ def _submit_task(session: requests.Session, submit_url: str, headers: dict, payl
 
         # 服务端 5xx 临时故障 → 重试
         if response.status_code >= 500 and attempt < _MAX_NETWORK_RETRIES:
-            wait = _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)]
-            print(f"    ⚠️ [提交任务] 服务端 {response.status_code}，{wait}s 后重试 ({attempt+1}/{_MAX_NETWORK_RETRIES})...")
+            # Agnes 免费后端队列满（video_queue_full）属于可控限流，需更长退避等待排空，
+            # 而非短间隔猛刷。专项退避 20/40/60/90/120/150s，总等待约 9.5 分钟自愈窗口。
+            _queue_full = False
+            try:
+                _ep = response.json()
+                if isinstance(_ep, dict) and _ep.get("code") == "video_queue_full":
+                    _queue_full = True
+            except Exception:
+                pass
+            if _queue_full:
+                wait = [20, 40, 60, 90, 120, 150][min(attempt, 5)]
+                print(f"    ⚠️ [提交任务] Agnes 视频队列已满 (video_queue_full)，{wait}s 后重试 ({attempt+1}/{_MAX_NETWORK_RETRIES})...")
+            else:
+                wait = _RETRY_BACKOFF[min(attempt, len(_RETRY_BACKOFF) - 1)]
+                print(f"    ⚠️ [提交任务] 服务端 {response.status_code}，{wait}s 后重试 ({attempt+1}/{_MAX_NETWORK_RETRIES})...")
             time.sleep(wait)
             continue
 
@@ -408,6 +424,16 @@ _MOTION_NEGATIVE_PROMPT = (
 )
 
 
+def _resolve_agnes_num_frames(duration: int = 8, fps: int = 24) -> int:
+    """把时长（秒）换算为 Agnes 帧数，满足 8n+1 约束。
+
+    Agnes 要求 num_frames 满足 8n+1 且 <= 441（约 5~18s @24fps）。
+    此处仅做粗换算，agnes.generate_video 内部还会再做一次 8n+1 对齐与上下限钳制。
+    """
+    n = max(1, round(duration * fps / 8))
+    return n * 8 + 1
+
+
 def generate_video_from_image(
     image_url: str,
     prompt: str,
@@ -416,6 +442,8 @@ def generate_video_from_image(
     thread_id: str = "",
     reference_images: list = None,
     reference_note: str = "",
+    negative_prompt: str = "",
+    duration: float = None,
 ) -> str:
     """
     调用视频生成模型（支持多后端 fallback）。
@@ -426,6 +454,8 @@ def generate_video_from_image(
                   完整注入，免费且无需信用卡。每分钟限 1 次（内置退避）。
       - jimeng:   即梦免费后端（图生/文生视频，仅首帧，无多参考图）。
       - dashscope:通义万相（t2v 免费链默认；i2v/r2v 仅在 DASHSCOPE_VIDEO_MODEL 显式指定时启用）。
+      - zhipu:    智谱 AI 免费视频后端（CogVideoX-Flash，model 级免费，无需信用卡）。
+                  仅首尾帧参与图生视频，返回本地 mp4，与 agnes 同契约。
 
     reference_images: 素材参考图列表（URL/本地路径），供 agnes keyframes 多图模式注入。
     reference_note:   素材参考图语义锚点文本，拼入 prompt（jimeng/dashscope 分支用）。
@@ -433,7 +463,7 @@ def generate_video_from_image(
     说明：默认策略（2026-08-11 起）对 dashscope 仅走 t2v 免费链以保额度可用；
     r2v/i2v 链仅在 DASHSCOPE_VIDEO_MODEL 显式指定时启用。
     """
-    # 规范化 thread_id（空串 -> _legacy），供 jimeng 分支按会话隔离产物
+    # 规范化 thread_id（空串 -> _generated），供 jimeng 分支按会话隔离产物
     _thread_id = thread_id or ""
     reference_images = reference_images or []
 
@@ -446,12 +476,27 @@ def generate_video_from_image(
         try:
             ff = first_frame_path or image_url
             _final_prompt = (prompt + "\n\n[参考图一致性约束]\n" + reference_note).strip() if reference_note else prompt
+            # 【修复-D】Agnes 不支持独立 negative_prompt 参数，把"抑制静态/增强运动"约束
+            # 以文本指令并入 prompt，避免生成"人物定格、画面静止"的弱运动视频。
+            if negative_prompt:
+                _final_prompt = (_final_prompt + "\n\n[Motion Constraint / Negative]\n" + negative_prompt).strip()
+            # 透传 VIDEO_DURATION（默认 8s）：此前写死 num_frames=81(≈3.4s)，
+            # 导致"延长时长"改造对 agnes 不生效。agnes 内部仍会做 8n+1 对齐与上限钳制。
+            # 若调用方显式传入 duration（按台词估算的 duration_seconds），优先采用，
+            # 使视频时长与台词长度匹配，避免统一短时长导致台词念不完。
+            _env_dur = int(os.getenv("VIDEO_DURATION", "8"))
+            if duration and 5 <= float(duration) <= 8:
+                _agnes_duration = int(round(float(duration)))
+            else:
+                _agnes_duration = _env_dur
+            _agnes_num_frames = _resolve_agnes_num_frames(_agnes_duration, fps=24)
+            print(f"    [Agnes] 时长 {_agnes_duration}s -> num_frames={_agnes_num_frames} (≈{_agnes_num_frames/24:.1f}s)")
             return agnes.generate_video(
                 _final_prompt,
                 reference_images=reference_images,
                 first_frame_url=ff,
                 last_frame_url=last_image_url if last_image_url else "",
-                width=1280, height=720, num_frames=81, frame_rate=24,
+                width=1280, height=720, num_frames=_agnes_num_frames, frame_rate=24,
                 thread_id=_thread_id,
             )
         except Exception as e:
@@ -459,6 +504,24 @@ def generate_video_from_image(
             # dashscope 视频链（会掩盖真实错误并必然失败 AccessDenied）。
             # 直接抛出，交由 video_gen_node 的 except 分支按失败/重试/跳过处理。
             raise RuntimeError(f"视频生成失败（Agnes 后端）: {e}") from e
+
+    # ── 智谱 AI 免费视频后端（VIDEO_PROVIDER=zhipu）──
+    # 走 CogVideoX-Flash（model 级免费，无需信用卡）。仅首尾帧参与图生视频
+    # （CogVideoX 不支持多参考图），返回本地 mp4 路径，与 agnes 同契约。
+    if _video_provider == "zhipu":
+        try:
+            ff = first_frame_path or image_url
+            _final_prompt = (prompt + "\n\n[参考图一致性约束]\n" + reference_note).strip() if reference_note else prompt
+            return zhipu.generate_video(
+                _final_prompt,
+                reference_images=reference_images,
+                first_frame_url=ff,
+                last_frame_url=last_image_url if last_image_url else "",
+                width=1280, height=720,
+                thread_id=_thread_id,
+            )
+        except Exception as e:
+            raise RuntimeError(f"视频生成失败（智谱后端）: {e}") from e
 
     # ── 即梦 AI Free 后端分支（白嫖网页版每日免费积分）──
     # 当 MULTIMODIA_BACKEND == "jimeng" 时，走即梦免费生视频（图生/文生视频）。

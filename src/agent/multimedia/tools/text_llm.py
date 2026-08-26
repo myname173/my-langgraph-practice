@@ -25,13 +25,16 @@ def sprint(*args, **kwargs):
 # read 超时（read 是“两次读取间隔”语义，不限制总时长），导致 DashScope 慢速
 # 流式响应永远不触发超时而永久挂起。只用 SDK 的 timeout 参数即可正确限制总时长。
 _LLM_TIMEOUT = 300.0
-_MAX_LLM_RETRIES = 2
-_LLM_BACKOFF = [5, 5]         # 退避（秒），缩短以快速 fail-fast
+_MAX_LLM_RETRIES = 4
+# 免费层为共享限流，瞬时 403（FreeTierOnly）频发；拉长退避让限流窗口过去，
+# 避免在长 pipeline 里第一轮全 403 就被逐个禁用、连锁 FATAL。
+_LLM_BACKOFF = [8, 15, 25, 40]   # 退避（秒），逐级拉长以熬过免费层限流风暴
 
+import httpx
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY", os.getenv("DASHSCOPE_API_KEY")),
     base_url=os.getenv("OPENAI_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-    timeout=_LLM_TIMEOUT,
+    timeout=httpx.Timeout(connect=15.0, read=60.0, write=15.0, pool=10.0),
 )
 
 # ── SiliconFlow 文本兜底 ──
@@ -83,16 +86,20 @@ def _is_retryable_llm_error(exc: Exception) -> bool:
 # ── 多模型 fallback 链：百炼免费额度常出现单模型瞬时限额（FreeTierOnly），
 #    按优先级尝试可用模型，避免整个 pipeline 因单一模型 403 而崩。 ──
 # 模型均走 DashScope 兼容 OpenAI 端点（OPENAI_BASE_URL），免费额度可用清单见 .env。
-# 排序原则：能力最强/带快照日期的稳定版优先，其次裸名兜底，最后跨厂商保底。
+# 排序原则：免费层「仍可访问」的 qwen 模型优先（实测 qwen3.7-max / qwen3.8-27b /
+# qwen3.7-max-preview 等已被免费额度耗尽 403，必须放到列表外，否则一上来就卡死）。
+# 经探测当前免费层可用的 DashScope 文本模型：qwen3.7-max-2026-06-08 / qwen-plus /
+# qwen-max。.env 的 DASHSCOPE_TEXT_MODEL 指向可用模型，其余仅作兜底。
 _LLM_FALLBACK_MODELS = [
-    os.getenv("DASHSCOPE_TEXT_MODEL"),          # 允许 .env 覆盖首选
-    "qwen3.7-max-2026-05-20",                   # 免费额度内快照版（100万，2026/08/20 到期）
-    "qwen3.8-max",                              # 最新版（免费额度内）
-    "qwen3.7-max",                              # 裸名兜底（免费额度内）
-    "qwen3.7-plus",                             # 裸名兜底（免费额度内；注意不能用带快照日期的 2026-05-26，会 403）
+    "qwen3.7-max-2026-06-08",                   # 免费层实测可用（qwen3.7-max 系列稳定档）
+    "qwen-plus",                                # 免费层实测可用
+    "qwen-max",                                 # 免费层实测可用（语义最强）
+    "qwen3.8-2.4t-a95b",                        # 小模型兜底：确认有免费额度时启用
+    os.getenv("DASHSCOPE_TEXT_MODEL"),          # 仅作最后兜底（指向可用模型，避免 403 循环）
 ]
 # 去空（覆盖变量未设置时）并保持顺序去重
 _LLM_FALLBACK_MODELS = list(dict.fromkeys([m for m in _LLM_FALLBACK_MODELS if m]))
+# NOTE: qwen 优先，deepseek 仅作兜底（付费模型，免费层会 402 insufficient balance）。
 
 # 进程内「失效模型」缓存：一旦某模型被确认不可达（如免费额度 403 / 鉴权失败），
 # 后续所有 call_llm 直接跳过它，不再浪费 3 次重试（约 35s）去打注定失败的请求。
@@ -100,7 +107,7 @@ _LLM_FALLBACK_MODELS = list(dict.fromkeys([m for m in _LLM_FALLBACK_MODELS if m]
 # 这类失效是瞬时的——过一段时间（_DISABLED_TTL 秒）后会自动恢复，因此禁用带 TTL，
 # 到期自动解禁，避免多镜头长 pipeline 在中后段因全部 fallback 被永久禁用而 FATAL。
 _DISABLED_MODELS = {}  # model -> 解禁时间戳（time.monotonic 绝对秒）
-_DISABLED_TTL = 120.0  # 失效模型 120s 后自动恢复（免费层限流风控多为短时）
+_DISABLED_TTL = 60.0   # 失效模型 60s 后自动恢复（免费层限流多为短时，缩短以加快自愈、避免连锁 FATAL）
 
 
 def _is_model_disabled(model: str) -> bool:
@@ -119,6 +126,15 @@ def _disable_model(model: str) -> None:
 
 def call_llm(prompt_text: str, role_name: str = "LLM", max_tokens: int | None = None) -> str:
     """通用的 LLM 调用接口（带超时、多模型 fallback 与重试）"""
+    import os as _os
+    # 写入项目根 output/（不在 src/ 内），避免触发 langgraph dev 的 watchfiles reload 循环
+    _llog = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "..", "..", "output", "_llm_calls.txt")
+    try:
+        with open(_llog, "a", encoding="utf-8") as _lf:
+            _lf.write(f"[call] role={role_name} len={len(prompt_text)} models={_LLM_FALLBACK_MODELS[:1]}\n")
+            _lf.flush()
+    except Exception:
+        pass
     # 对总导演增加温度，其它角色保持较低温度
     temperature = 0.9 if "总导演" in role_name else 0.7
     # 长输出（总导演分镜 / 安全审核 / 导演精修）若不限制会触发 DashScope 兼容端点超时挂起，
@@ -181,10 +197,20 @@ def call_llm(prompt_text: str, role_name: str = "LLM", max_tokens: int | None = 
                             pieces.append(delta.content)
                     if _provider == "siliconflow":
                         sprint(f"    [OK] [{role_name}] 已通过 SiliconFlow 兜底模型 {model} 完成输出（DashScope 额度耗尽或不可用）")
+                    try:
+                        with open(_llog, "a", encoding="utf-8") as _lf:
+                            _lf.write(f"[ok] role={role_name} model={model} len={len(''.join(pieces))}\n"); _lf.flush()
+                    except Exception:
+                        pass
                     return "".join(pieces).strip()
 
                 except Exception as e:
                     last_err = e
+                    try:
+                        with open(_llog, "a", encoding="utf-8") as _lf:
+                            _lf.write(f"[fail] role={role_name} model={model} err={type(e).__name__}: {str(e)[:120]}\n"); _lf.flush()
+                    except Exception:
+                        pass
                     if _is_retryable_llm_error(e) and attempt < _MAX_LLM_RETRIES:
                         wait = _LLM_BACKOFF[min(attempt, len(_LLM_BACKOFF) - 1)]
                         sprint(f"    [WARN] [{role_name}] 模型 {model} 异常 ({type(e).__name__})，{wait}s 后重试 ({attempt+1}/{_MAX_LLM_RETRIES})...")

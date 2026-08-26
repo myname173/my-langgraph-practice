@@ -1,0 +1,74 @@
+[
+  {
+    "filename": "user_女剑仙.jpg",
+    "story": "xianxia",
+    "category": "角色",
+    "label": "女剑仙",
+    "role_name": "女剑仙",
+    "description": "正面全身立姿，青碧色长袍，云纹袖口，翡翠腰带，白靴，长发束半配绿玉簪，双手自然垂放",
+    "source": "user"
+  },
+  {
+    "filename": "user_女剑仙_1.jpg",
+    "story": "xianxia",
+    "category": "角色",
+    "label": "女剑仙",
+    "role_name": "女剑仙",
+    "description": "侧面持剑姿态，青碧色长袍同款，翡翠腰带，手握剑柄，暮色山峦背景",
+    "source": "user"
+  },
+  {
+    "filename": "user_魔尊.jpg",
+    "story": "xianxia",
+    "category": "角色",
+    "label": "魔尊",
+    "role_name": "魔尊",
+    "description": "侧面持剑，玄黑鎏金龙纹长袍，骷髅骨面半盔，红月背景，手持魔剑，脚下暗紫魔气缭绕",
+    "source": "user"
+  },
+  {
+    "filename": "user_魔尊_1.jpg",
+    "story": "xianxia",
+    "category": "角色",
+    "label": "魔尊",
+    "role_name": "魔尊",
+    "description": "正面全身，玄黑鎏金龙纹袍配深红里衬，半面骷髅面具带红纹，双手握剑竖立胸前，红月崩山背景",
+    "source": "user"
+  },
+  {
+    "filename": "user_仙尊.jpg",
+    "story": "xianxia",
+    "category": "角色",
+    "label": "仙尊",
+    "role_name": "仙尊",
+    "description": "正面全身，雪白道袍银线云鹤纹刺绣，银发束冠配玉簪，长须飘飘，手持青玉如意，日轮光晕云海背景",
+    "source": "user"
+  },
+  {
+    "filename": "user_仙尊_1.jpg",
+    "story": "xianxia",
+    "category": "角色",
+    "label": "仙尊",
+    "role_name": "仙尊",
+    "description": "侧面指路姿态，白袍同款银线云鹤纹，侧身一手背后一手指天，身后瀑布桃花飞落云海环绕",
+    "source": "user"
+  },
+  {
+    "filename": "user_青锋剑.png",
+    "story": "xianxia",
+    "category": "道具",
+    "label": "青锋剑",
+    "role_name": "青锋剑",
+    "description": "本命青锋飞剑，玉蓝透光剑身云纹，银柄流苏，青灵光环绕符文",
+    "source": "user"
+  },
+  {
+    "filename": "user_神秘玉佩.png",
+    "story": "xianxia",
+    "category": "道具",
+    "label": "神秘玉佩",
+    "role_name": "神秘玉佩",
+    "description": "古玉佩，羊脂白玉雕仙兽图腾，金芒内蕴，红丝绦悬于雾中",
+    "source": "user"
+  }
+]

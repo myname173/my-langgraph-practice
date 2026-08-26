@@ -16,6 +16,9 @@ class MultimediaState(TypedDict):
     # ── P0 音频闭环（配音 + 字幕 + 混音）──
     audio_track: Optional[str]               # 配音音频本地路径 (.mp3)
     subtitle_path: Optional[str]             # 生成的 SRT 字幕路径
+    subtitle_entries: Optional[List[Dict[str, Any]]]  # 解析后的字幕条目 JSON（前端逐句时间轴）
+    voiceover_duration: Optional[float]      # 配音总时长（秒），前端展示「配音生成了多长」
+    audio_status: Optional[str]              # 音频闭环状态：native(原生音轨)/dubbed(本地配音)/None(未跑)
     bgm_path: Optional[str]                  # 背景音乐路径（P1 接入）
     final_movie_with_audio: Optional[str]    # 音画合成后的最终成片
     voice_role: Optional[str]                # 配音音色 key（见 tts.EDGE_TTS_VOICES_ZH）
@@ -109,9 +112,24 @@ class MultimediaState(TypedDict):
     # reference_sheets，避免重复消耗即梦/百炼额度且保持角色/武器/场景一致。
     assets_imported: Optional[bool]
 
+    # 素材匹配可见化报告：记录用户注入的参考图「是否被剧本用到、被多少个镜头命中」。
+    # 消除当前"名称对不上就静默失效"的隐性坑——前端据此给每张参考图标
+    # 「已用于 N 个镜头 / 未命中剧本」。结构:
+    #   {"matched": {"资产名": 命中镜头数}, "unmatched": ["资产名", ...]}
+    # 由 reference_gen_node(基线) + image_gen_node(逐镜头累加) 共同维护。
+    asset_match_report: Optional[Dict[str, Any]]
+
     # 任务控制
     aborted: bool
     abort_reason: Optional[str]
+
+    # 低干预 / 自动模式：为真时跳过 6 道人工审核闸口（直接以 approve 放行），
+    # 普通用户免逐镜点击；专业用户默认 False 走人审闭环。
+    auto_mode: Optional[bool]
+
+    # 成片草稿审片（stitcher 之后、audio_mixer 之前的「无声粗剪」确认闸口）决策：
+    # approve → 进入音频混音；rewrite → 回到 stitcher 重拼。仅 enable_audio 且非 auto_mode 时触发。
+    draft_decision: Optional[str]
 
     # 视频免费额度耗尽降级的镜头索引列表（供最终摘要如实报告，避免全局中止浪费已生成产物）
     quota_exhausted_scenes: Optional[List[int]]

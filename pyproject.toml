@@ -60,10 +60,16 @@ lint.ignore = [
     "UP035",
     # Relax the convention by _not_ requiring documentation for every function parameter.
     "D417",
+    # 中文 docstring 首句多为名词短语（如 "成片质量巡检（QC）工具"），
+    # 强制结尾标点与中文书写习惯冲突，放宽（项目内既有 docstring 同此风格）。
+    "D415",
     "E501",
 ]
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["D", "UP"]
+# CLI 脚本（scripts/）以 print 作为用户可读输出，与既有 _poll_progress.py /
+# _check_assets.py 一致，豁免 T201；其余规则仍适用。
+"scripts/*" = ["T201"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 

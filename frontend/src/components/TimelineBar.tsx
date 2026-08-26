@@ -5,16 +5,23 @@ interface TimelineBarProps {
   state: MultimediaState;
   busy: boolean;
   onRerun: (sceneIndex: number) => void;
+  /** 是否已生成配音（音画合成成片存在即视为已配音） */
+  dubbed?: boolean;
 }
 
-function sceneStatus(scene: SceneLike | undefined): "done" | "keyframe" | "pending" {
+function sceneStatus(
+  scene: SceneLike | undefined,
+  dubbed: boolean,
+): "dubbed" | "done" | "keyframe" | "pending" {
   if (!scene) return "pending";
+  if (dubbed) return "dubbed";
   if (scene.final_video_url || scene.raw_video_url) return "done";
   if (scene.image_url || scene.last_image_url) return "keyframe";
   return "pending";
 }
 
-const STATUS_LABEL: Record<"done" | "keyframe" | "pending", string> = {
+const STATUS_LABEL: Record<"dubbed" | "done" | "keyframe" | "pending", string> = {
+  dubbed: "已配音",
   done: "已生片",
   keyframe: "已出图",
   pending: "未生成",
@@ -24,7 +31,7 @@ const STATUS_LABEL: Record<"done" | "keyframe" | "pending", string> = {
  * 镜头时间轴：把所有镜头横向铺开，用户可点任意镜头上的“重跑此镜头”
  * 按钮，让图从该镜头重头制作（后端会重置 checkpoint 并续跑）。
  */
-export function TimelineBar({ state, busy, onRerun }: TimelineBarProps) {
+export function TimelineBar({ state, busy, onRerun, dubbed }: TimelineBarProps) {
   const scenes = state.scenes ?? [];
   const [rerunIdx, setRerunIdx] = useState<number | null>(null);
 
@@ -54,7 +61,7 @@ export function TimelineBar({ state, busy, onRerun }: TimelineBarProps) {
       </div>
       <div className="timeline-track">
         {scenes.map((scene, idx) => {
-          const st = sceneStatus(scene);
+          const st = sceneStatus(scene, !!dubbed);
           const isCurrent =
             typeof currentIdx === "number" && currentIdx === idx;
           const thumb =

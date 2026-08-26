@@ -16,8 +16,9 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LG_BASE = "http://localhost:2024"
-ASSISTANT_ID = "fe096781-5601-53d2-b2f6-0d3403f7e9ca"
+import os as _os
+LG_BASE = _os.getenv("LG_BASE_URL", "http://localhost:2024")  # 可用环境变量覆盖端口
+ASSISTANT_ID = _os.getenv("LG_ASSISTANT_ID")  # 留空则自动从线程元数据获取
 
 
 async def main():
@@ -44,13 +45,28 @@ async def main():
         decision["reason"] = "人工否决"
 
     from langgraph_sdk import get_client
-    from langchain_core.messages import Command
     client = get_client(url=LG_BASE, api_key="")
 
-    print(f"[resume] thread_id={tid} action={action}")
+    # 未显式指定 assistant_id 时，从线程元数据自动解析
+    aid = ASSISTANT_ID
+    if not aid:
+        try:
+            th = await client.threads.get(tid)
+            aid = (th.get("metadata") or {}).get("assistant_id")
+        except Exception as e:
+            print(f"[warn] 读取线程元数据失败: {e}")
+        if not aid:
+            # 退回到默认 assistant（graph_id=agent）
+            asst = await client.assistants.search()
+            aid = asst[0]["assistant_id"] if asst else None
+    if not aid:
+        print("错误: 无法确定 assistant_id，请设置环境变量 LG_ASSISTANT_ID")
+        sys.exit(1)
+
+    print(f"[resume] thread_id={tid} action={action} assistant_id={aid}")
     async for chunk in client.runs.stream(
-        tid, ASSISTANT_ID,
-        command=Command(resume=decision),
+        tid, aid,
+        command={"resume": decision},
         stream_mode=["values", "updates"],
     ):
         if chunk.event == "updates":

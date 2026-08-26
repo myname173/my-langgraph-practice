@@ -26,6 +26,7 @@ LangGraph Server 只负责图执行，不托管生成产物（图片 / 视频 / 
 from __future__ import annotations
 
 import os
+import json
 import time
 import uuid
 from pathlib import Path
@@ -153,6 +154,7 @@ _MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 单文件 ≤ 10MB
 @assets_router.post("/upload")
 async def upload_assets(
     thread_id: str | None = None,
+    story: str | None = None,
     files: list[UploadFile] = File(...),
 ) -> dict:
     """接收用户本地上传的素材参考图，存到 output/assets_uploaded/<thread_id>/
@@ -192,10 +194,107 @@ async def upload_assets(
             {
                 "filename": f.filename or stored,
                 "url": f"/media/assets_uploaded/{thread_id}/{stored}",
+                # 透传故事标签（如 xianxia），便于前端把素材归为对应故事，供素材库隔离与展示
+                "story": story or None,
             }
         )
         print(f"[*] 素材上传: thread={thread_id} file={f.filename} -> {stored} ({len(data)}B)")
     return {"ok": True, "thread_id": thread_id, "files": saved}
+
+
+# 共享参考图素材库目录：只存放用户上传/登记的参考图（角色/道具/场景）。
+# 由 jimeng 生成的关键帧/尾帧必须放到 output/keyframes/<thread>/ 或 _generated/，
+# 不得进入本目录，避免被前端误当作参考图素材。
+_LIBRARY_DIR = OUTPUT_DIR / "reference_sheets" / "library"
+_MANIFEST_PATH = _LIBRARY_DIR / "manifest.json"
+
+
+class RegisterAssetPayload(BaseModel):
+    """把一张已上传（/assets/upload 返回）或已有的图登记进共享参考图素材库。
+
+    登记后该图会写入 reference_sheets/library/<category>/ 目录并记录到 manifest.json，
+    之后在「创建任务 -> 已有素材库」与独立「素材库」界面中均可勾选，
+    并随任务提交真正参与视频生成（作一致性参考锚点）。
+    注意：jimeng 生成的关键帧/尾帧不得通过本接口登记，避免混入参考图库。
+    """
+
+    url: str  # /media/assets_uploaded/<tid>/<file> 或 /media/reference_sheets/library/<category>/<file>
+    name: str  # 资产名（角色/道具/场景名），用于剧本匹配
+    category: str = "character"  # character | prop | environment
+    description: str = ""
+    story: str = ""  # 故事标签（如 xianxia），仅归类展示，不影响锚定
+
+
+@assets_router.post("/register")
+async def register_asset(payload: RegisterAssetPayload) -> dict:
+    """把素材图登记进共享素材库（复制文件 + 写 manifest）。"""
+    if not payload.url or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="url 与 name 必填")
+
+    norm = payload.url.replace("\\", "/").lstrip("/")
+    if not norm.startswith("media/"):
+        raise HTTPException(status_code=400, detail="仅支持 /media/ 开头的素材 url")
+
+    # 解析源文件真实路径（复用 /media 解析逻辑：优先 OUTPUT_DIR，否则 PROJECT_ROOT）
+    rel_path = norm[len("media/"):]
+    root_marker = f"{PROJECT_ROOT.name}/"
+    if root_marker in rel_path:
+        src = (PROJECT_ROOT / rel_path.split(root_marker, 1)[1]).resolve()
+        anchor = PROJECT_ROOT.resolve()
+    else:
+        src = (OUTPUT_DIR / rel_path).resolve()
+        anchor = OUTPUT_DIR.resolve()
+    try:
+        src.relative_to(anchor)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="禁止访问该路径") from None
+    if not src.is_file():
+        raise HTTPException(status_code=404, detail=f"源文件不存在: {payload.url}")
+
+    # 登记到 reference_sheets/library/<category>/ 下，按资产名+分类组织，
+    # 不再平铺进 keyframes/_legacy，避免与 jimeng 关键帧混放
+    _LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+    cat_dir = _LIBRARY_DIR / payload.category
+    cat_dir.mkdir(parents=True, exist_ok=True)
+    ext = os.path.splitext(src.name)[1].lower() or ".png"
+    # 以资产名+分类命名，重名追加后缀，杜绝覆盖
+    base = "".join(c if c.isalnum() or c in "-_" else "_" for c in f"{payload.category}_{payload.name.strip()}")
+    dest_name = f"{base}{ext}"
+    dest = cat_dir / dest_name
+    n = 1
+    while dest.exists():
+        dest_name = f"{base}_{n}{ext}"
+        dest = cat_dir / dest_name
+        n += 1
+    dest.write_bytes(src.read_bytes())
+
+    # 读写 manifest（共享素材库元数据），互斥用简单串行即可（低频写）
+    manifest: list[dict] = []
+    if _MANIFEST_PATH.is_file():
+        try:
+            manifest = json.loads(_MANIFEST_PATH.read_text(encoding="utf-8"))
+            if not isinstance(manifest, list):
+                manifest = []
+        except Exception:
+            manifest = []
+    manifest.append(
+        {
+            "filename": dest_name,
+            "story": payload.story or None,
+            "category": payload.category,
+            "label": payload.name.strip(),
+            "role_name": payload.name.strip(),
+            "description": payload.description or "",
+            "source": "user",
+        }
+    )
+    _MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[*] 素材登记入库: {payload.name} -> {dest_name} ({payload.category})")
+    return {
+        "ok": True,
+        "filename": dest_name,
+        "url": f"/media/reference_sheets/library/{payload.category}/{dest_name}",
+    }
 
 
 class RerunFromPayload(BaseModel):

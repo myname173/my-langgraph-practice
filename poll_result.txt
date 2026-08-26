@@ -1,0 +1,9 @@
+NEXT: ['image_generator']
+showrunner: None
+visual_context: dict ['intent', 'genres', 'camera_rules', 'lighting_rules', 'motion_rules', 'composition_rules']
+shot_strategy: None
+scenes: list len=6
+images: None
+keyframes: None
+video_tasks: None
+final_video: None

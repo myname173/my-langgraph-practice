@@ -31,11 +31,59 @@ function label(node: string): string {
   return NODE_LABELS[node] ?? node;
 }
 
+/** 人工审核闸口节点：在自动模式下会被自动放行 */
+const REVIEW_NODES = new Set([
+  "showrunner_review",
+  "prompt_preview",
+  "image_review",
+  "end_frame_prompt_preview",
+  "end_frame_review",
+  "video_review",
+]);
+
 interface Props {
   timeline: TimelineEntry[];
   status: RunStatus;
   currentSceneIndex?: number;
   totalScenes?: number;
+  /** 低干预 / 自动模式：为真时审核类节点追加「自动」徽标 */
+  autoMode?: boolean;
+  /** 音频闭环相关状态：用于在 audio_mixer 节点下展示子步骤进度 */
+  audioState?: {
+    audio_track?: string | null;
+    subtitle_path?: string | null;
+    bgm_path?: string | null;
+    final_movie_with_audio?: string | null;
+    voiceover_duration?: number | null;
+    audio_status?: string | null;
+  };
+}
+
+/** audio_mixer 节点的子步骤（按完成度展示） */
+function AudioSubSteps({ audio }: { audio: NonNullable<Props["audioState"]> }) {
+  const steps: { key: string; label: string; done: boolean }[] = [
+    {
+      key: "tts",
+      label: audio.voiceover_duration != null ? `配音 ${audio.voiceover_duration}s` : "配音生成",
+      done: !!audio.audio_track || !!audio.voiceover_duration,
+    },
+    { key: "sub", label: "字幕生成", done: !!audio.subtitle_path },
+    { key: "bgm", label: "BGM 配乐", done: !!audio.bgm_path },
+    { key: "mix", label: "音画混音", done: !!audio.final_movie_with_audio },
+  ];
+  return (
+    <div className="audio-substeps">
+      {steps.map((s) => (
+        <span
+          key={s.key}
+          className={`substep ${s.done ? "done" : "pending"}`}
+          title={s.done ? "已完成" : "进行中"}
+        >
+          {s.done ? "✓" : "…"} {s.label}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 export function NodeProgressTimeline({
@@ -43,6 +91,8 @@ export function NodeProgressTimeline({
   status,
   currentSceneIndex,
   totalScenes,
+  autoMode,
+  audioState,
 }: Props) {
   return (
     <div className="timeline">
@@ -65,6 +115,14 @@ export function NodeProgressTimeline({
         {timeline.map((entry, idx) => {
           const isLast = idx === timeline.length - 1;
           const active = isLast && status === "running";
+          const showAudio =
+            entry.node === "audio_mixer" &&
+            !!audioState &&
+            (active ||
+              audioState.audio_track ||
+              audioState.subtitle_path ||
+              audioState.bgm_path ||
+              audioState.final_movie_with_audio);
           return (
             <li
               key={entry.id}
@@ -73,11 +131,17 @@ export function NodeProgressTimeline({
               <span className="dot" />
               <div className="timeline-body">
                 <span className="node-name">{label(entry.node)}</span>
+                {autoMode && REVIEW_NODES.has(entry.node) && (
+                  <span className="auto-badge" title="自动模式：已自动放行">
+                    自动
+                  </span>
+                )}
                 <time>
                   {new Date(entry.at).toLocaleTimeString("zh-CN", {
                     hour12: false,
                   })}
                 </time>
+                {showAudio && <AudioSubSteps audio={audioState!} />}
               </div>
             </li>
           );

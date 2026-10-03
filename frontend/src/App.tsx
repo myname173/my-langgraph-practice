@@ -17,6 +17,8 @@ import { AssetLibraryPanel } from "./components/AssetLibraryPanel";
 import { AssetManagerView } from "./components/AssetManagerView";
 import { FinalMoviePlayer } from "./components/FinalMoviePlayer";
 import { SplashScreen, shouldPlaySplash } from "./components/SplashScreen";
+import { SettingsPanel } from "./components/SettingsPanel";
+import { RunCostBar } from "./components/RunCostBar";
 import type { ReviewDecision, RunInput } from "./types";
 
 const STATUS_TEXT: Record<string, string> = {
@@ -42,6 +44,9 @@ export default function App() {
     resumeRun,
     continueRun,
     rerunFrom,
+    autoQueue,
+    planAutoApprove,
+    cancelAutoApprove,
     loadThread,
     stop,
     reset,
@@ -54,9 +59,25 @@ export default function App() {
   const [highlightName, setHighlightName] = useState<string | undefined>(undefined);
   // 布局优化：左列「创建任务 / 成果」Tab。启动/加载历史后自动跳成果，去修正时跳回创建
   const [activeTab, setActiveTab] = useState<"create" | "result" | "assets">("create");
+  // 生成引擎设置面板（API Key / 模型名 / 音色），挂在头部齿轮按钮
+  const [showSettings, setShowSettings] = useState(false);
   // 开场动画：仅首次访问播放（localStorage 记忆），之后不再弹
   const [showSplash, setShowSplash] = useState<boolean>(() => shouldPlaySplash());
+  // F-6：窄屏导航抽屉（≤900px 出现汉堡按钮，侧栏改为左侧抽屉）
+  const [navOpen, setNavOpen] = useState(false);
   const busy = status === "running";
+
+  // F-5：当前执行阶段（从时间轴最新节点推导），供镜头卡展示「生成中」细态
+  const lastNode = timeline.length ? timeline[timeline.length - 1].node : "";
+  const NODE_PHASE: Record<string, string> = {
+    director: "分镜设计中", director_refine: "分镜设计中", prompt_preview: "分镜设计中",
+    image_generator: "图像生成中", reviewer: "关键帧审核中", image_review: "关键帧审核中",
+    end_frame_director: "尾帧设计中", end_frame_prompt_preview: "尾帧设计中",
+    end_frame_generator: "尾帧生成中", end_frame_review: "尾帧审核中",
+    videographer: "运镜设计中", video_generator: "视频生成中",
+    video_reviewer: "视频审核中", video_review: "视频审核中",
+  };
+  const scenePhase = busy ? NODE_PHASE[lastNode] ?? "生成中" : "";
 
   // 字幕逐句 → 按 scenes[].video_duration 累积时间轴映射到所属镜头，供卡片/面板展示
   const subtitleByScene = mapSubtitlesToScenes(
@@ -109,22 +130,45 @@ export default function App() {
   }, [continueRun]);
 
   return (
-    <div className="app">
+    <div className={`app${navOpen ? " nav-open" : ""}`}>
       {showSplash && (
         <SplashScreen onDone={() => setShowSplash(false)} />
       )}
+
+      {/* F-6：抽屉打开时的背景遮罩（点击关闭） */}
+      {navOpen && (
+        <button
+          className="nav-scrim"
+          aria-label="关闭导航"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
+
+      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
 
       <ThreadSidebar
         activeThreadId={threadId}
         onSelect={(tid) => {
           void loadThread(tid);
           setActiveTab("result");
+          setNavOpen(false);
         }}
         refreshKey={refreshKey}
+        mobileOpen={navOpen}
+        onClose={() => setNavOpen(false)}
       />
 
       <main className="main">
         <header className="app-header">
+          {/* F-6：窄屏汉堡按钮，展开历史会话抽屉 */}
+          <button
+            className="nav-toggle"
+            aria-label="打开导航"
+            aria-expanded={navOpen}
+            onClick={() => setNavOpen(true)}
+          >
+            ☰ 会话
+          </button>
           <h1>Multimedia Agent 控制台</h1>
           <div className="status-area">
             <span className={`status status-${status}`}>
@@ -138,8 +182,18 @@ export default function App() {
                 中断
               </button>
             )}
+            <button
+              className="btn btn-ghost"
+              onClick={() => setShowSettings(true)}
+              title="配置 API Key / 模型名 / 配音音色"
+            >
+              ⚙️ 设置
+            </button>
           </div>
         </header>
+
+        {/* F-2：顶栏常驻成本与额度仪表 */}
+        <RunCostBar state={state} busy={busy} threadId={threadId} />
 
         {error && <div className="error-banner">运行错误：{error}</div>}
         {state.error_log && (
@@ -243,7 +297,21 @@ export default function App() {
                     <FinalMoviePlayer state={state} />
                     <AudioSubtitlePanel state={state} />
                     <TimelineBar state={state} busy={busy} onRerun={(i) => void rerunFrom(i)} dubbed={dubbed} />
-                    <SceneGallery state={state} subtitleByScene={subtitleByScene} />
+                    <SceneGallery
+                      state={state}
+                      subtitleByScene={subtitleByScene}
+                      interrupt={interrupt}
+                      busy={busy}
+                      runActive={busy || status === "interrupted"}
+                      scenePhase={scenePhase}
+                      onDecide={(d) => void handleDecision(d)}
+                      onRerun={(i, opts) => void rerunFrom(i, opts)}
+                      onPlanApprovals={(idxs, lock) => planAutoApprove(idxs, lock)}
+                      autoQueue={autoQueue}
+                      onCancelQueue={cancelAutoApprove}
+                      threadId={threadId}
+                      onRecipeApplied={() => void handleContinue()}
+                    />
                     <ReferenceSheetsPanel
                       state={state}
                       onRequestFix={(name) => {

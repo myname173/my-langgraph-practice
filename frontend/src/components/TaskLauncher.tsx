@@ -120,6 +120,10 @@ export function TaskLauncher({ busy, onStart, highlightName }: Props) {
   const [bgmMood, setBgmMood] = useState("ambient");
   // 低干预 / 自动模式：跳过 6 道人工审核闸口，普通用户免逐镜点击
   const [autoMode, setAutoMode] = useState(false);
+  // F-3：质量档位（P0-1 三档生成阶梯）——fast 省额度 / standard 均衡 / cinema 高质量
+  const [qualityTier, setQualityTier] = useState<"fast" | "standard" | "cinema">("standard");
+  // P2-1：成片包装——片头片尾卡（默认开）
+  const [titleCard, setTitleCard] = useState(true);
   // 故事标识：用于素材库按故事隔离（如 cyber/gull/xianxia），空则由前端回退 threadId 推断
   const [story, setStory] = useState("");
 
@@ -283,6 +287,8 @@ export function TaskLauncher({ busy, onStart, highlightName }: Props) {
       reference_embeddings: [],
       reference_sheets: sheets,
       assets_imported: hasAssets,
+      quality_tier: qualityTier,
+      title_card: titleCard,
       auto_mode: autoMode,
       story: story.trim() || undefined,
       aborted: false,
@@ -307,6 +313,29 @@ export function TaskLauncher({ busy, onStart, highlightName }: Props) {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
         }}
       />
+
+      {/* ── F-3：质量档位（三档生成阶梯）── */}
+      <div className="tier-cards" role="radiogroup" aria-label="质量档位">
+        {([
+          { key: "fast", label: "快速预览", desc: "最省额度 · 短片段低配管线，适合跑通剧情", tag: "省" },
+          { key: "standard", label: "均衡出品", desc: "默认推荐 · 质量与额度平衡", tag: "荐" },
+          { key: "cinema", label: "电影级", desc: "最贵最慢 · 长片段高配管线，用于关键成片", tag: "贵" },
+        ] as const).map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="radio"
+            aria-checked={qualityTier === t.key}
+            disabled={busy}
+            className={`tier-card ${qualityTier === t.key ? "selected" : ""}`}
+            onClick={() => setQualityTier(t.key)}
+          >
+            <span className="tier-tag">{t.tag}</span>
+            <span className="tier-label">{t.label}</span>
+            <span className="tier-desc">{t.desc}</span>
+          </button>
+        ))}
+      </div>
 
       {/* ── 素材选择区：上传本地图 / 勾选已有素材，作为一致性参考 ── */}
       <div className="asset-upload-card">
@@ -564,7 +593,21 @@ export function TaskLauncher({ busy, onStart, highlightName }: Props) {
           🤖 自动模式（跳过逐镜确认，一键直出）
         </label>
 
-        {/* 故事标识：素材库按故事隔离，支撑多故事（cyber/gull/xianxia 等） */}
+        {/* P2-1：成片包装卡 */}
+        <label
+          className="check"
+          title="在成片首尾追加标题卡与结束卡（约各 2.2 秒），字幕与配音时间轴自动对齐。"
+        >
+          <input
+            type="checkbox"
+            checked={titleCard}
+            disabled={busy}
+            onChange={(e) => setTitleCard(e.target.checked)}
+          />
+          片头片尾包装卡（标题 / FIN）
+        </label>
+
+                {/* 故事标识：素材库按故事隔离，支撑多故事（cyber/gull/xianxia 等） */}
         <label className="select story-input">
           故事标识（可选）
           <input

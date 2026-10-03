@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>F-6 窄屏审计夹具</title>
+  <link rel="stylesheet" href="./assets/app.css" />
+  <style>
+    /* 仅夹具用：模拟产物媒体，避免依赖真实文件 */
+    .audit-video-ph { width: 100%; aspect-ratio: 16 / 9; background: #000;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      display: grid; place-items: center; color: #556; font-size: 13px; }
+    .audit-img-ph { width: 100%; aspect-ratio: 16 / 9; background: #11161f;
+      border: 1px solid var(--border); border-radius: 8px;
+      display: grid; place-items: center; color: #556; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="app nav-open">
+    <button class="nav-scrim" aria-hidden="true"></button>
+
+    <aside class="sidebar open">
+      <button class="sidebar-close" aria-label="收起">✕</button>
+      <div class="brand">
+        <div class="brand-mark">🎬</div>
+        <div class="brand-text">
+          <span class="brand-title">Multimedia Agent</span>
+          <span class="brand-sub">视频生成控制台</span>
+        </div>
+      </div>
+      <div class="sidebar-head"><h3>历史会话</h3><button class="refresh-btn">⟳</button></div>
+      <ul class="thread-list">
+        <li><button class="thread-item thread-active">
+          <span class="thread-title">赛博朋克短片：少年剑客与黑袍法师的霓虹屋顶对决</span>
+          <span class="thread-meta-row"><span class="thread-badge">运行中</span><span class="thread-progress">2/5 镜头</span></span>
+          <span class="thread-id">dryrun_17 · 10-03 12:10</span></button></li>
+        <li><button class="thread-item">
+          <span class="thread-title">道士复仇</span>
+          <span class="thread-meta-row"><span class="thread-badge">等待人工审核</span><span class="thread-progress">3/8 镜头</span></span>
+          <span class="thread-id">series_2 · 10-02 21:04</span></button></li>
+      </ul>
+    </aside>
+
+    <main class="main">
+      <header class="app-header">
+        <button class="nav-toggle" aria-label="打开导航">☰ 会话</button>
+        <h1>Multimedia Agent 控制台</h1>
+        <div class="status-area">
+          <span class="status status-running">运行中</span>
+          <code class="thread-code">dryrun_17</code>
+          <button class="btn btn-ghost">中断</button>
+          <button class="btn btn-ghost">⚙️ 设置</button>
+        </div>
+      </header>
+
+      <div class="content-grid">
+        <div class="left-col">
+
+          <!-- 关键区 2/3：成片播放 -->
+          <section class="final-movie">
+            <h3><span class="section-icon">🎥</span>最终成片（含音轨）</h3>
+            <div class="audit-video-ph">final_movie_with_audio.mp4</div>
+            <div class="final-links">
+              <a href="#">下载成片</a>
+              <a href="#">查看无音轨版本</a>
+            </div>
+          </section>
+
+          <!-- 关键区 1/3：审核卡片 -->
+          <section class="approval-card">
+            <header class="approval-header">
+              <span class="stage-tag">image_review</span>
+              <h2>镜头 2 关键帧审核</h2>
+            </header>
+            <p class="approval-message">请确认关键帧是否符合预期；可直接通过，或打回重写并指定修正粒度。</p>
+
+            <div class="field-block">
+              <label>剧本</label>
+              <p class="readonly-text">少年剑客立于霓虹屋顶边缘，黑袍法师自阴影中缓步上前，雨丝在霓虹下泛着冷光。</p>
+            </div>
+
+            <p class="hint hint-warn">⚠️ 人物相似度偏低（0.58），建议重绘或改用保首帧</p>
+
+            <div class="metric-badges">
+              <span class="badge badge-ok">整体相似度 0.82</span>
+              <span class="badge badge-warn">人物相似度 0.58</span>
+              <span class="badge badge-ok">连贯性 0.71</span>
+            </div>
+
+            <div class="media-row">
+              <figure class="media-preview"><div class="audit-img-ph">当前产物</div><figcaption>当前产物</figcaption></figure>
+              <figure class="media-preview"><div class="audit-img-ph">参考图</div><figcaption>参考图</figcaption></figure>
+            </div>
+
+            <div class="field-block">
+              <label>关键帧候选（3 版）<span class="dirty-tag">已选候选 #2</span></label>
+              <div class="candidate-strip">
+                <button class="candidate-item"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt=""><span>#1</span></button>
+                <button class="candidate-item selected"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt=""><span>#2</span></button>
+                <button class="candidate-item current"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt=""><span>#3 当前</span></button>
+              </div>
+            </div>
+
+            <div class="field-block">
+              <label>修正方式（「打回重写」时生效，默认重绘关键帧）</label>
+              <div class="fix-row">
+                <button class="fix-btn"><span class="fix-btn-label">仅改 Prompt</span><span class="fix-btn-desc">不重绘，直接修改提示词继续</span></button>
+                <button class="fix-btn selected"><span class="fix-btn-label">重绘关键帧</span><span class="fix-btn-desc">保留上下文，重新生成该镜关键帧</span></button>
+                <button class="fix-btn"><span class="fix-btn-label">保首帧重滚</span><span class="fix-btn-desc">复用首帧，重跑该镜视频</span></button>
+                <button class="fix-btn"><span class="fix-btn-label">延长</span><span class="fix-btn-desc">在现有片段基础上向后延伸</span></button>
+              </div>
+            </div>
+
+            <div class="field-block">
+              <label>图片 Prompt<span class="dirty-tag">已修改</span></label>
+              <textarea class="mono" rows="4">low angle shot, taoist priest on neon rooftop, rain, cool palette, coherent illustrative visual style</textarea>
+            </div>
+
+            <div class="field-block">
+              <label>打回理由（选填，将作为重写依据）</label>
+              <textarea rows="2" placeholder="例如：主体动作不明显，需要更强的镜头运动"></textarea>
+            </div>
+
+            <label class="lock-check">
+              <input type="checkbox" />
+              通过后锁定此镜头（后续重跑/续跑将复用该视频，不再重新生成）
+            </label>
+
+            <div class="action-row">
+              <button class="btn btn-approve">通过</button>
+              <button class="btn btn-rewrite">打回重写</button>
+              <button class="btn btn-edit_prompt">改写后继续</button>
+            </div>
+          </section>
+
+        </div>
+
+        <div class="right-col">
+          <!-- 关键区 3/3：进度时间轴 -->
+          <div class="timeline">
+            <div class="timeline-head">
+              <h3><span class="section-icon">📈</span>执行进度</h3>
+              <span class="scene-counter">镜头 2 / 5</span>
+            </div>
+            <ol class="timeline-list">
+              <li class="timeline-item finished"><span class="dot"></span><div class="timeline-body"><span class="node-name">总导演拆解剧本</span><time>12:01:02</time></div></li>
+              <li class="timeline-item finished"><span class="dot"></span><div class="timeline-body"><span class="node-name">总导演人工审片</span><span class="auto-badge">自动</span><time>12:01:05</time></div></li>
+              <li class="timeline-item finished"><span class="dot"></span><div class="timeline-body"><span class="node-name">生成一致性参考图</span><time>12:01:40</time></div></li>
+              <li class="timeline-item active"><span class="dot"></span><div class="timeline-body"><span class="node-name">生成关键帧</span><time>12:03:11</time></div></li>
+              <li class="timeline-item finished"><span class="dot"></span><div class="timeline-body"><span class="node-name">音频混流 / 字幕</span><time>12:02:30</time>
+                <div class="audio-substeps">
+                  <span class="substep done">✓ 配音 12.4s</span>
+                  <span class="substep done">✓ 字幕生成</span>
+                  <span class="substep pending">… BGM 配乐</span>
+                  <span class="substep pending">… 音画混音</span>
+                </div></div></li>
+            </ol>
+          </div>
+
+          <div class="meta-panel">
+            <h3><span class="section-icon">📋</span>任务元信息</h3>
+            <p><span>视觉风格</span>xianxia</p>
+            <p><span>内容类型</span>short_film</p>
+            <p><span>重写次数</span>1</p>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+function measure(tag) {
+  const q = (s) => document.querySelector(s);
+  const R = (el) => (el ? el.getBoundingClientRect() : null);
+  const cs = (el, p) => (el ? getComputedStyle(el)[p] : null);
+  const scrollableAncestor = (el) => {
+    let p = el.parentElement;
+    while (p && p !== document.body) {
+      const c = getComputedStyle(p);
+      if (/(auto|scroll)/.test(c.overflowX) || /(auto|scroll)/.test(c.overflow)) return true;
+      p = p.parentElement;
+    }
+    return false;
+  };
+  const o = { tag: tag, vw: innerWidth, vh: innerHeight };
+  o.docScrollW = document.documentElement.scrollWidth;
+  o.hOverflow = document.documentElement.scrollWidth > innerWidth + 1;
+
+  const ac = q(".approval-card");
+  const ar = q(".action-row");
+  const btn = q(".action-row .btn");
+  const ta = q(".approval-card textarea");
+  const fr = q(".fix-row");
+  const cstrip = q(".candidate-strip");
+  const cimg = q(".candidate-item img, .candidate-item");
+  const fm = q(".final-movie video, .audit-video-ph");
+  const fl = q(".final-links");
+  const fla = q(".final-links a");
+  const tl = q(".timeline-list");
+  const ti = q(".timeline-item");
+  const sb = q(".sidebar");
+  const nt = q(".nav-toggle");
+  const sc = q(".sidebar-close");
+  const scrim = q(".nav-scrim");
+
+  o.approvalCardW = ac ? Math.round(R(ac).width) : null;
+  o.approvalCardPad = cs(ac, "padding");
+  o.actionRowDir = cs(ar, "flexDirection");
+  o.actionBtnH = btn ? Math.round(R(btn).height) : null;
+  o.actionBtnW = btn ? Math.round(R(btn).width) : null;
+  o.textareaFont = cs(ta, "fontSize");
+  o.fixRowCols = cs(fr, "gridTemplateColumns");
+  o.candStripOverflowX = cs(cstrip, "overflowX");
+  o.candItemH = cimg ? Math.round(R(cimg).height) : null;
+  o.finalMovieW = fm ? Math.round(R(fm).width) : null;
+  o.finalLinksDir = cs(fl, "flexDirection");
+  o.finalLinkH = fla ? Math.round(R(fla).height) : null;
+  o.timelineMaxH = cs(tl, "maxHeight");
+  o.timelineItemH = ti ? Math.round(R(ti).height) : null;
+  o.sidebarPos = cs(sb, "position");
+  o.sidebarTransform = cs(sb, "transform");
+  o.sidebarW = sb ? Math.round(R(sb).width) : null;
+  o.navToggleDisplay = cs(nt, "display");
+  o.sidebarCloseDisplay = cs(sc, "display");
+  o.scrimPresent = !!scrim;
+
+  const bad = [];
+  document.querySelectorAll(".main *, .approval-card *, .timeline *").forEach((el) => {
+    const rr = el.getBoundingClientRect();
+    if (rr.width > 0 && rr.height > 0 && (rr.right > innerWidth + 1 || rr.left < -1)) {
+      if (scrollableAncestor(el)) return; // 横向滚动容器内的元素不算页面溢出
+      bad.push((el.className && String(el.className)) || el.tagName);
+    }
+  });
+  o.overflowing = Array.from(new Set(bad)).slice(0, 15);
+  return o;
+}
+
+window.addEventListener("load", () => {
+  const res = [];
+  res.push(measure("drawer-open"));
+  const app = document.querySelector(".app");
+  const sb = document.querySelector(".sidebar");
+  sb.style.transition = "none";
+  app.classList.remove("nav-open");
+  sb.classList.remove("open");
+  void document.body.offsetWidth;
+  res.push(measure("drawer-closed"));
+  sb.style.transition = "";
+  const pre = document.createElement("pre");
+  pre.id = "audit-result";
+  pre.textContent = "AUDIT_JSON_START" + JSON.stringify(res, null, 1) + "AUDIT_JSON_END";
+  document.body.appendChild(pre);
+});
+</script>
+
+</body>
+</html>

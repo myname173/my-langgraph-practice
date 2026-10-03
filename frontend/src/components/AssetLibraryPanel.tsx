@@ -16,6 +16,8 @@ interface ManifestEntry {
   label: string;
   role_name?: string;
   description?: string;
+  /** 来源标记：user=用户登记的参考图，keyframe=jimeng 生成的关键帧（后端 static_server 写入） */
+  source?: string;
 }
 
 /** 资产分类 → reference_sheets 字段名（复数 key） */
@@ -26,7 +28,11 @@ const CAT_TO_SHEET: Record<Exclude<AssetCategory, "ignore">, "characters" | "pro
 };
 
 /** 读取参考图素材库（仅 reference_sheets/library 里用户登记的图，不含 jimeng 关键帧） */
-async function listKeyframes(threadId?: string | null): Promise<{ dir: string; items: { name: string }[] }> {
+// 注：素材库统一走 library/manifest.json，与 thread 无关；
+// 参数以下划线前缀命名以表明「有意保留但不使用」（noUnusedParameters 允许 _ 前缀）。
+async function listKeyframes(
+  _threadId?: string | null,
+): Promise<{ dir: string; items: { name: string; category?: string }[] }> {
   const r = await fetch(`/media/reference_sheets/library/manifest.json`);
   if (!r.ok) return { dir: "reference_sheets/library", items: [] };
   try {
@@ -35,14 +41,14 @@ async function listKeyframes(threadId?: string | null): Promise<{ dir: string; i
     const items = arr
       .filter((m) => m.source === "user")
       .map((m) => {
-        const cat = (m as any).category || "character";
+        const cat = m.category || "character";
         return {
           name: m.filename,
           url: `/media/reference_sheets/library/${cat}/${m.filename}`,
           category: cat,
         };
       });
-    return { dir: "reference_sheets/library", items: items as { name: string }[] };
+    return { dir: "reference_sheets/library", items };
   } catch {
     return { dir: "reference_sheets/library", items: [] };
   }
@@ -95,7 +101,7 @@ export function AssetLibraryPanel({ threadId, story }: Props) {
           const m = manifest[it.name];
           if (!m) return null;
           if (wantStory && m.story && m.story !== wantStory) return null;
-          const cat = (m as any).category || it.category || "character";
+          const cat = m.category || it.category || "character";
           return {
             filename: it.name,
             url: `/media/reference_sheets/library/${cat}/${it.name}`,

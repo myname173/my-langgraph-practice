@@ -74,9 +74,19 @@ interface Props {
   onSelect: (threadId: string) => void;
   /** 变化时触发刷新 */
   refreshKey: unknown;
+  /** F-6：窄屏抽屉是否展开（≤900px 生效） */
+  mobileOpen?: boolean;
+  /** F-6：关闭抽屉（点关闭按钮 / 选中会话后调用） */
+  onClose?: () => void;
 }
 
-export function ThreadSidebar({ activeThreadId, onSelect, refreshKey }: Props) {
+export function ThreadSidebar({
+  activeThreadId,
+  onSelect,
+  refreshKey,
+  mobileOpen,
+  onClose,
+}: Props) {
   const [threads, setThreads] = useState<ThreadItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,7 +135,15 @@ export function ThreadSidebar({ activeThreadId, onSelect, refreshKey }: Props) {
   }, [load, refreshKey]);
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${mobileOpen ? " open" : ""}`}>
+      {/* F-6：窄屏抽屉关闭按钮 */}
+      <button
+        className="sidebar-close"
+        aria-label="收起会话列表"
+        onClick={() => onClose?.()}
+      >
+        ✕
+      </button>
       <div className="brand">
         <div className="brand-mark">🎬</div>
         <div className="brand-text">
@@ -183,7 +201,11 @@ export function ThreadSidebar({ activeThreadId, onSelect, refreshKey }: Props) {
                 className={`thread-item ${
                   t.thread_id === activeThreadId ? "thread-active" : ""
                 } ${corrupted ? "thread-corrupted" : ""}`}
-                onClick={() => !corrupted && onSelect(t.thread_id)}
+                onClick={() => {
+                  if (corrupted) return;
+                  onSelect(t.thread_id);
+                  onClose?.(); // F-6：移动端选中后自动收起抽屉
+                }}
                 disabled={corrupted}
                 title={
                   corrupted

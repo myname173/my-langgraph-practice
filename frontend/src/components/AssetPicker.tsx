@@ -17,6 +17,8 @@ interface ManifestEntry {
   label: string;
   role_name?: string;
   description?: string;
+  /** 来源标记：user=用户登记的参考图，keyframe=jimeng 生成的关键帧（后端 static_server 写入） */
+  source?: string;
 }
 
 /** 读取参考图素材库（仅 reference_sheets/library 里 source=user 的图）。返回归一化的 AssetItem 列表。 */

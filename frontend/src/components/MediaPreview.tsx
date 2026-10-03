@@ -35,9 +35,12 @@ export function MediaPreview({
   const primary = resolveMediaUrl(url);
   const fallback = resolveMediaUrl(fallbackUrl);
   const src = primary || fallback;
-  if (!src) return null;
 
-  const asVideo = forceVideo || isVideoUrl(src);
+  // ⚠️ Hooks 必须无条件调用：早退只能放在所有 hooks 之后。
+  // 若在此处 `if (!src) return null`，则 src 由空变非空时（关键帧刚生成）
+  // 同一次挂载的 hook 数量会从 0 变成 5，React 会抛
+  // "Rendered more hooks than during the previous render" 并让整个成果区白屏。
+  const asVideo = forceVideo || (src ? isVideoUrl(src) : false);
   // 识图：自身未识别时回退到父组件传入的 ratioKind
   const dim = useImageDim(asVideo ? null : primary);
   const kind: MediaRatio = ratioKind ?? dim?.kind ?? "landscape";
@@ -47,6 +50,8 @@ export function MediaPreview({
     setCurrent(primary || fallback);
     setErrored(false);
   }, [primary, fallback]);
+
+  if (!src) return null;
 
   return (
     <figure className={`media-preview ${asVideo ? "is-video" : "is-image"} ratio-${kind}`}>

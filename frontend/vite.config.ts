@@ -39,6 +39,11 @@ export default defineConfig({
         target: MEDIA_TARGET,
         changeOrigin: true,
       },
+      // 设置面板接口（static_server.py 的 GET/POST /settings），与 /media 同源转发
+      "/settings": {
+        target: MEDIA_TARGET,
+        changeOrigin: true,
+      },
       // 后端健康检查（static_server.py 的 GET /health），同源转发，供开场动画探测
       "/healthz": {
         target: MEDIA_TARGET,

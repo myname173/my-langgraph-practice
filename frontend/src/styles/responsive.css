@@ -1,0 +1,331 @@
+/* ============================================================
+   responsive.css — 移动端与窄屏适配层（F-6）
+   最后加载，用于覆盖前面各层的桌面优先设定。
+
+   断点体系：
+     ≤1024px  平板 / 小笔记本：解除固定高度与嵌套滚动
+     ≤ 900px  手机横屏 / 平板竖屏：侧栏改抽屉，三处关键区适配
+     ≤ 768px  手机：排版降级、触控目标、防 iOS 聚焦缩放
+     ≤ 430px  小屏手机：进一步收紧
+     pointer:coarse  触控设备：统一增大点击目标
+
+   三处重点（路线图 F-6 硬指标）：
+     1) 审核卡片 .approval-card   2) 成片播放 .final-movie   3) 进度时间轴 .timeline
+   ============================================================ */
+
+/* 全局兜底：任何媒体 / 长串都不撑破视口 */
+html,
+body {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+img,
+video {
+  max-width: 100%;
+}
+.readonly-text,
+.node-name,
+.thread-title,
+.meta-long {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 移动端导航元素默认隐藏（仅在窄屏出现）
+   .nav-scrim 一并默认隐藏：桌面端即使被误渲染也不占位（React 侧已条件渲染，此处兜底） */
+.nav-toggle,
+.sidebar-close,
+.nav-scrim {
+  display: none;
+}
+
+/* ---------- ≤1024px：解除固定高度 / 嵌套滚动 ---------- */
+@media (max-width: 1024px) {
+  .main {
+    max-height: none;
+    overflow-y: visible;
+    padding: 20px 18px 56px;
+  }
+  .product-zone {
+    max-height: none;
+    overflow: visible;
+  }
+  .sidebar {
+    max-height: none;
+  }
+}
+
+/* ---------- ≤900px：侧栏抽屉 + 三处关键区适配 ---------- */
+@media (max-width: 900px) {
+  /* 导航：侧栏从文档流改为左侧抽屉 */
+  .app {
+    display: block;
+  }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    height: 100dvh;
+    width: min(86vw, 330px);
+    max-height: none;
+    z-index: 70;
+    transform: translateX(-100%);
+    transition: transform 0.26s ease;
+    box-shadow: 0 0 44px rgba(0, 0, 0, 0.55);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: rgba(6, 9, 14, 0.55);
+    backdrop-filter: blur(2px);
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .sidebar-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-2);
+    color: var(--text-soft);
+    font-size: 16px;
+    cursor: pointer;
+    z-index: 2;
+  }
+
+  .app-header {
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .app-header h1 {
+    font-size: 18px;
+  }
+  .status-area {
+    gap: 8px;
+    width: 100%;
+  }
+
+  /* 关键区 1/3：审核卡片 */
+  .approval-card {
+    padding: 14px;
+  }
+  .approval-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .approval-header h2 {
+    font-size: 15px;
+    line-height: 1.42;
+  }
+  .action-row {
+    flex-direction: column;
+    gap: 9px;
+  }
+  .action-row .btn {
+    width: 100%;
+    min-height: 46px;
+    font-size: 15px;
+  }
+  .fix-row {
+    grid-template-columns: 1fr;
+  }
+  .candidate-strip {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 6px;
+    scroll-snap-type: x proximity;
+  }
+  .candidate-item {
+    flex: 0 0 auto;
+    scroll-snap-align: start;
+  }
+  .lock-check {
+    align-items: flex-start;
+    line-height: 1.5;
+    padding: 10px 0;
+  }
+  .lock-check input {
+    width: 18px;
+    height: 18px;
+    margin-top: 1px;
+    flex-shrink: 0;
+  }
+
+  /* 关键区 2/3：成片播放 */
+  .final-movie video {
+    width: 100%;
+    max-height: 56dvh;
+    object-fit: contain;
+  }
+  .final-links {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .final-links a {
+    min-height: 44px;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    background: var(--panel-2);
+  }
+
+  /* 关键区 3/3：进度时间轴 */
+  .timeline-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .timeline-list {
+    max-height: none;
+  }
+  .timeline-item {
+    gap: 10px;
+  }
+  .audio-substeps {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* 窄屏下栅格统一塌陷 */
+  .media-row,
+  .media-row.ratio-grid-portrait-portrait,
+  .media-row.ratio-grid-portrait-square,
+  .media-row.ratio-grid-landscape-landscape,
+  .media-row.ratio-grid-square-square {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+  .media-preview {
+    max-width: 100%;
+  }
+}
+
+/* ---------- ≤768px：排版降级 + 触控目标 + 防聚焦缩放 ---------- */
+@media (max-width: 768px) {
+  .main {
+    padding: 16px 14px 52px;
+  }
+  .content-grid {
+    gap: 16px;
+  }
+  .left-col,
+  .right-col {
+    gap: 14px;
+  }
+
+  /* 输入类控件字号 ≥16px，避免 iOS 聚焦时自动放大页面。
+     原样式 .mono(0,1,0) / .field-block textarea(0,1,1) 等比普通 textarea(0,0,1) 更具体，
+     会压过字号设置，故此处用 !important 强制（表单可访问性属合理例外）。 */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
+  /* Tab 条横向滚动，避免 4 个 Tab 在手机上被压扁 */
+  .work-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .work-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .work-tab {
+    flex: 0 0 auto;
+    min-height: 42px;
+    white-space: nowrap;
+  }
+
+  .panel,
+  .approval-card,
+  .quick-gen,
+  .timeline,
+  .final-movie {
+    border-radius: var(--radius);
+  }
+}
+
+/* ---------- ≤430px：小屏再收紧 ---------- */
+@media (max-width: 430px) {
+  .app-header h1 {
+    font-size: 16px;
+  }
+  .brand-title {
+    font-size: 14px;
+  }
+  .work-tab {
+    padding: 9px 10px;
+    font-size: 12.5px;
+  }
+  .wt-num {
+    display: none;
+  }
+}
+
+/* ---------- 触控设备：统一放大点击目标 ---------- */
+@media (pointer: coarse) {
+  .btn,
+  .work-tab,
+  .thread-item,
+  .fix-btn,
+  .candidate-item,
+  .refresh-btn,
+  .nav-toggle {
+    min-height: 44px;
+  }
+  .btn-small {
+    min-height: 36px;
+  }
+}
+
+/* ---------- 刘海屏 / 缺口安全区（viewport-fit=cover 后生效） ---------- */
+@supports (padding: env(safe-area-inset-left)) {
+  @media (max-width: 900px) {
+    .main {
+      padding-left: max(14px, env(safe-area-inset-left));
+      padding-right: max(14px, env(safe-area-inset-right));
+      padding-bottom: max(52px, env(safe-area-inset-bottom));
+    }
+    .sidebar {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+  }
+}

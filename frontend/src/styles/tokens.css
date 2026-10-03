@@ -1,0 +1,60 @@
+/* ============================================================
+   tokens.css — 设计令牌层（F-6 从 styles.css 拆分）
+   颜色 / 圆角 / 阴影 / 字体等 CSS 自定义属性，以及 reset 与 body。
+   ============================================================ */
+:root {
+  --bg-0: #0b0e14;
+  --bg-1: #0f131c;
+  --panel: rgba(23, 28, 39, 0.72);
+  --panel-solid: #12161f;
+  --panel-2: rgba(31, 37, 51, 0.6);
+  --border: #232b39;
+  --border-strong: #2e3849;
+  --text: #e6edf3;
+  --text-soft: #aab4c2;
+  --muted: #8b98a9;
+  --accent: #4f8cff;
+  --accent-2: #7c5cff;
+  --accent-grad: linear-gradient(135deg, #4f8cff 0%, #7c5cff 100%);
+  --ok: #2ea043;
+  --warn: #d29922;
+  --danger: #da3633;
+  --radius: 14px;
+  --radius-lg: 20px;
+  --radius-sm: 10px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  --shadow-glow: 0 0 0 1px rgba(79, 140, 255, 0.25), 0 8px 30px rgba(79, 140, 255, 0.12);
+  --blur: blur(14px);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 12% -8%, rgba(79, 140, 255, 0.12), transparent 60%),
+    radial-gradient(1000px 560px at 100% 0%, rgba(124, 92, 255, 0.1), transparent 55%),
+    radial-gradient(900px 700px at 50% 120%, rgba(46, 160, 67, 0.06), transparent 60%),
+    linear-gradient(rgba(11, 14, 20, 0.72), rgba(11, 14, 20, 0.72)),
+    url(/bg-landscape.jpg) center / cover no-repeat fixed,
+    var(--bg-0);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(79, 140, 255, 0.35);
+}

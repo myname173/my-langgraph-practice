@@ -23,21 +23,39 @@ export function mapSubtitlesToScenes(
 ): Map<number, SubtitleEntry[]> {
   const out = new Map<number, SubtitleEntry[]>();
   if (!entries || !scenes.length) return out;
-  let cum = 0;
-  // 每镜的全局起始时间
-  const sceneStarts = scenes.map((sc) => {
-    const start = cum;
-    const dur = typeof sc.video_duration === "number" ? sc.video_duration : 0;
-    cum += dur;
-    return start;
-  });
+
+  // 优先用后端 stitcher 回写的真实起始时间（已扣除转场重叠，见 graph.stitcher_node）。
+  // 只要任一镜头带 segment_start，就整体采用真实起点，与后端 build_srt 保持同一时间轴，
+  // 避免前端累加与转场重叠不一致造成的错位。
+  const hasRealStart = scenes.some((sc) => typeof sc.segment_start === "number");
+  const sceneStarts = hasRealStart
+    ? scenes.map((sc) => sc.segment_start ?? 0)
+    : (() => {
+        let cum = 0;
+        return scenes.map((sc) => {
+          const start = cum;
+          const dur = typeof sc.video_duration === "number" ? sc.video_duration : 0;
+          cum += dur;
+          return start;
+        });
+      })();
+
   for (const e of entries) {
-    // 找到 e.start 落入的镜头区间（末尾兜底到最后一镜）
-    let idx = sceneStarts.findIndex(
-      (st, i) =>
-        e.start >= st &&
-        e.start < st + (scenes[i].video_duration || Infinity),
-    );
+    // 找到 e.start 落入的镜头区间（末尾兜底到最后一镜）。
+    // 时长缺失时用 duration_seconds 兜底，绝不用 Infinity —— 否则缺失镜头会
+    // 形成 [st, ∞) 区间，把后面所有字幕全部吸走，其余镜头字幕为空。
+    let idx = sceneStarts.findIndex((st, i) => {
+      const vd = scenes[i].video_duration;
+      const est = scenes[i].duration_seconds;
+      const dur =
+        typeof vd === "number" && vd > 0
+          ? vd
+          : typeof est === "number" && est > 0
+            ? est
+            : 0;
+      if (dur <= 0) return false; // 无有效时长：不参与区间匹配
+      return e.start >= st && e.start < st + dur;
+    });
     if (idx === -1) {
       // 落在所有区间之外（舍入误差）时，归到最接近的镜
       idx = sceneStarts.reduce(

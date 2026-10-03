@@ -6,6 +6,9 @@
 /** 后端 _normalize_action 支持的动作 */
 export type ReviewAction = "approve" | "rewrite" | "edit_prompt";
 
+/** P1-3 外科手术修正类型（与 graph.py FIX_TYPES 严格对齐） */
+export type FixType = "prompt_only" | "keep_first_frame" | "reimage" | "extend";
+
 /** graph.py 中人工审核关卡的 stage 标识 */
 export type InterruptStage =
   | "showrunner_review"
@@ -64,6 +67,10 @@ export interface ImageReviewPayload extends BaseInterruptPayload {
   portrait_similarity?: number | null;
   continuity_score?: number | null;
   auto_feedback?: string;
+  /** P1-3：可选修正类型（后端闸口下发，前端渲染为按钮） */
+  fix_types?: FixType[];
+  /** F-1：历史候选关键帧（最近 4 版，含当前）——approve 时可回传 pick_candidate 挑选 */
+  candidates?: string[];
 }
 
 /** line 2522: end_frame_review_gate_node —— 尾帧审片 */
@@ -89,12 +96,31 @@ export interface VideoReviewPayload extends BaseInterruptPayload {
   auto_feedback?: string;
   action_beat?: string;
   motion_hint?: string;
+  /** P1-3：可选修正类型（后端闸口下发，前端渲染为按钮） */
+  fix_types?: FixType[];
+}
+
+/** P1-2：成片 Critic 报告（抽帧复审节奏/连续性/画质） */
+export interface FinalCriticIssue {
+  type: string;
+  desc: string;
+  severity: string;
+}
+
+export interface FinalCriticReport {
+  available: boolean;
+  score: number | null;
+  issues: FinalCriticIssue[];
+  raw?: string;
+  method?: string;
 }
 
 /** 成片草稿审片（stitcher 之后、audio_mixer 之前的无声粗剪确认） */
 export interface DraftReviewPayload extends BaseInterruptPayload {
   stage: "draft_review";
   video_url: string;
+  /** P1-2：成片 Critic 报告（可能为 null：开关关闭或失败） */
+  critic_report?: FinalCriticReport | null;
 }
 
 export type InterruptPayload =
@@ -122,6 +148,12 @@ export interface ReviewDecision {
   image_prompt?: string;
   /** video_review 可改 */
   video_prompt?: string;
+  /** P1-3：修正粒度（rewrite 时生效；image 侧默认 reimage，video 侧默认 keep_first_frame） */
+  fix_type?: FixType;
+  /** F-1：从候选关键帧中选定某一版（index 对应 image_review payload.candidates 下标） */
+  pick_candidate?: number;
+  /** P0-1：video_review 通过后锁定该镜头（后续重跑/续跑复用其视频） */
+  lock?: boolean;
 }
 
 /** scenes[] 元素（后端为松散 dict，此处列出前端会用到的字段） */
@@ -145,6 +177,22 @@ export interface SceneLike {
   continuity_score?: number | null;
   /** stitcher 回写的真实片段时长（秒），即该镜头视频实际长度 */
   video_duration?: number | null;
+  /** stitcher 回写的该片段在成片中的真实起始时间（秒，已扣除转场重叠） */
+  segment_start?: number | null;
+  /** 导演按台词字符数估算的分镜时长（秒，5-8s），时长缺失时的兜底 */
+  duration_seconds?: number | null;
+  /** 该镜头是否生成失败（降级为占位/跳过） */
+  shot_failed?: boolean;
+  /** 该镜头视频生成失败重试次数（F-2 成本估算用） */
+  video_gen_failures?: number;
+  /** F-1：历史候选关键帧（每次生成都登记，审核卡 A/B 挑选的数据源） */
+  image_candidates?: string[];
+  /** P1-4：视觉模型判断角色漂移，待修正 */
+  needs_realign?: boolean;
+  /** P1-3：该镜头最近一次使用的修正类型 */
+  fix_type?: string;
+  /** P1-3：是否已应用过延长修正 */
+  extend_applied?: boolean;
   [key: string]: unknown;
 }
 
@@ -180,6 +228,8 @@ export interface MultimediaState {
   /** 素材匹配可见化报告：哪些用户参考图被剧本用到、命中几个镜头（见 AssetMatchReport） */
   asset_match_report?: AssetMatchReport | null;
   rewrite_count?: number;
+  /** P0-1：已锁定镜头（0-based 下标）——重跑/续跑时复用其成片 */
+  locked_scenes?: number[];
   studio_summary?: Record<string, unknown> | null;
   critic_eval?: Record<string, unknown> | null;
   quality_gates?: Record<string, unknown> | null;
@@ -195,6 +245,12 @@ export interface MultimediaState {
   voiceover_duration?: number | null;
   /** 音频闭环状态：native(原生音轨优先) / dubbed(本地配音混音) / 未跑 */
   audio_status?: "native" | "dubbed" | null;
+  /** 配音音频文件路径（audio_mixer 产物，见 state.py） */
+  audio_track?: string | null;
+  /** 字幕 .srt 文件路径（audio_mixer 产物，见 state.py） */
+  subtitle_path?: string | null;
+  /** BGM 音频文件路径（audio_mixer 产物，见 state.py） */
+  bgm_path?: string | null;
   [key: string]: unknown;
 }
 
@@ -218,6 +274,10 @@ export interface RunInput {
   assets_imported?: boolean;
   /** 低干预 / 自动模式：为真时后端跳过 6 道人工审核闸口，直接以 approve 放行。 */
   auto_mode?: boolean;
+  /** P0-1：质量档位 fast / standard / cinema（空则后端回退 QUALITY_TIER env / 默认档） */
+  quality_tier?: string;
+  /** P2-1：片头片尾包装卡开关（默认后端开启；显式 false 关闭） */
+  title_card?: boolean;
   /** 所属故事标识（如 cyber/gull/xianxia），用于素材库按故事隔离；为空时前端回退到 threadId 推断。 */
   story?: string;
   aborted: boolean;
@@ -336,4 +396,48 @@ export interface SelectedAsset {
 export interface AssetSelection {
   /** 已选素材平铺列表 */
   items: SelectedAsset[];
+}
+
+
+/** P2-4 单镜配方（后端 tools/recipe.build_shot_recipe 产出） */
+export interface ShotRecipe {
+  index: number;
+  script?: string;
+  action_beat?: string;
+  image?: {
+    backend?: string;
+    model?: string;
+    prompt?: string;
+    negative_prompt?: string;
+    size?: string;
+    ref_images?: string[];
+    ref_strength?: number | null;
+  };
+  end_frame?: { prompt?: string; ref_strength?: number | null; ref_images?: string[] };
+  video?: {
+    backend?: string;
+    model?: string;
+    quality_tier?: string;
+    duration?: number | null;
+    prompt?: string;
+    negative_prompt?: string;
+    use_first_last_frame?: boolean;
+    reference_images?: string[];
+  };
+  fix?: { fix_type?: string; extend_applied?: boolean; recipe_patched_at?: string };
+  artifacts?: { image_url?: string; last_image_url?: string; final_video_url?: string };
+  [key: string]: unknown;
+}
+
+/** P2-4 整任务配方（后端 tools/recipe.build_task_recipe 产出） */
+export interface TaskRecipe {
+  schema: string;
+  thread_id: string;
+  created_at: string;
+  task: string;
+  global_setting?: string;
+  style?: { visual_style?: string; description?: string; suffix?: string };
+  post?: { color_preset?: string; subtitle_theme?: string; title_card?: boolean };
+  shots: ShotRecipe[];
+  [key: string]: unknown;
 }

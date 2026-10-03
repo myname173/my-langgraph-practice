@@ -20,6 +20,7 @@ Reference Sheet Generation Module
 
 import json
 import os
+import shutil
 import logging
 from typing import Dict, Any, Optional
 
@@ -43,18 +44,87 @@ def _ext_from_url(url: str, default: str = ".png") -> str:
     return ext or default
 
 
+def _local_media_path(src: Path) -> Optional[str]:
+    """若本地文件位于项目内，返回其 /media 相对路径；否则 None。"""
+    try:
+        rel = src.resolve().relative_to(PROJECT_ROOT)
+        return f"/media/{str(rel).replace(os.sep, '/')}"
+    except (ValueError, OSError):
+        return None
+
+
+def _ref_cache_enabled() -> bool:
+    """参考图缓存开关（默认开）。"""
+    return (os.getenv("MULTIMEDIA_REF_CACHE", "1") or "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _ref_cache_dir() -> Path:
+    d = REFERENCE_SHEETS_DIR / "_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _ref_cache_key(prompt: str, size: str) -> str:
+    import hashlib
+    return hashlib.sha1(f"{prompt}|{size}".encode("utf-8")).hexdigest()
+
+
+def _ref_cache_lookup(prompt: str, size: str) -> Optional[Path]:
+    """命中则返回缓存文件路径；否则 None。"""
+    if not _ref_cache_enabled():
+        return None
+    f = _ref_cache_dir() / f"{_ref_cache_key(prompt, size)}.png"
+    if f.is_file() and f.stat().st_size > 0:
+        return f
+    return None
+
+
+def _ref_cache_store(prompt: str, size: str, media_path: str) -> None:
+    """把刚生成的参考图（/media 路径）复制进缓存，供后续运行复用。"""
+    if not _ref_cache_enabled():
+        return
+    try:
+        if not media_path or not media_path.startswith("/media/"):
+            return
+        src = PROJECT_ROOT / media_path[len("/media/"):]
+        if src.is_file() and src.stat().st_size > 0:
+            dst = _ref_cache_dir() / f"{_ref_cache_key(prompt, size)}.png"
+            if not dst.exists():
+                shutil.copyfile(src, dst)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("参考图缓存写入失败（忽略）: %s", exc)
+
+
 def _persist_reference_image(remote_url: str, thread_id: str, category: str, name: str) -> str:
     """
-    把远程参考图下载到本地 output/reference_sheets/<thread_id>/<category>/，
-    返回可经 /media 访问的本地路径；下载失败时回退原远程 URL。
+    把参考图归置到本地 output/reference_sheets/<thread_id>/<category>/，
+    返回可经 /media 访问的本地路径；失败时回退原值。
+
+    入参可能是：
+      - 远程 URL（DashScope 等）→ 下载落盘；
+      - 本地文件路径（jimeng 免费后端已落盘）→ 项目内直接转 /media，项目外复制；
+      - data: URI / 已是 /media 路径 → 原样透传。
     """
-    if not remote_url or remote_url.startswith("/media"):
+    if not remote_url or remote_url.startswith("/media") or remote_url.startswith("data:"):
         return remote_url
     tid = thread_id or "default"
     safe_cat = "".join(c for c in category if c.isalnum() or c in "-_").strip() or "misc"
     safe_name = "".join(c for c in name if c.isalnum() or c in "-_").strip() or "ref"
     target_dir = REFERENCE_SHEETS_DIR / tid / safe_cat
     try:
+        # —— 本地文件（免费后端已落盘）——
+        if os.path.isfile(remote_url):
+            src = Path(remote_url)
+            media = _local_media_path(src)
+            if media:
+                return media  # 已在项目内，直接由静态服务器提供
+            target_dir.mkdir(parents=True, exist_ok=True)
+            dest = target_dir / f"{safe_name}{_ext_from_url(remote_url)}"
+            shutil.copyfile(src, dest)
+            if dest.is_file() and dest.stat().st_size > 0:
+                return f"/media/{str(dest.relative_to(PROJECT_ROOT)).replace(os.sep, '/')}"
+            return remote_url
+        # —— 远程 URL ——
         target_dir.mkdir(parents=True, exist_ok=True)
         ext = _ext_from_url(remote_url)
         dest = target_dir / f"{safe_name}{ext}"
@@ -68,7 +138,7 @@ def _persist_reference_image(remote_url: str, thread_id: str, category: str, nam
             rel = str(dest.relative_to(PROJECT_ROOT)).replace(os.sep, "/")
             return f"/media/{rel}"
     except Exception as exc:  # noqa: BLE001
-        logger.warning("参考图本地持久化失败，回退远程 URL: %s (%s)", remote_url, exc)
+        logger.warning("参考图本地持久化失败，回退原值: %s (%s)", remote_url, exc)
     return remote_url
 
 
@@ -203,61 +273,51 @@ def generate_reference_sheets(
 
     sheets: Dict[str, Any] = {"characters": {}, "props": {}, "environments": {}}
 
-    # ── 生成角色转面图 ──
+    # S1（P0-2 子项）：参考图生成并行化——角色/道具/环境三组循环原本串行逐张生成，
+    # 即梦单张生图数秒~数十秒，多角色任务累计耗时显著。此处把全部条目扁平化后用
+    # 线程池并发提交（max_workers=3，避免触发即梦并发限流），结果按条目回收写回。
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    jobs = []
     for char in elements.get("characters", []):
-        name = char.get("name", "character")
-        desc = char.get("description", "")
-        name_cn = char.get("name_cn", "")
-        print(f"    [*] Generating character turnaround: {name}" + (f" ({name_cn})" if name_cn else ""))
-
-        prompt = _build_character_prompt(char, style_suffix)
-        try:
-            url = generate_keyframe(
-                prompt,
-                size="1024*1024",  # square format for turnaround sheet
-            )
-            url = _persist_reference_image(url, thread_id, "characters", name)
-            sheets["characters"][name] = {"url": url, "description": desc, "name_cn": name_cn}
-            print(f"    [OK] Character sheet: {name}")
-        except Exception as e:
-            print(f"    [WARN] Character sheet failed for {name}: {e}")
-
-    # ── 生成道具设定图 ──
+        jobs.append(("characters", char, _build_character_prompt(char, style_suffix)))
     for prop in elements.get("props", []):
-        name = prop.get("name", "prop")
-        desc = prop.get("description", "")
-        name_cn = prop.get("name_cn", "")
-        print(f"    [*] Generating prop sheet: {name}" + (f" ({name_cn})" if name_cn else ""))
-
-        prompt = _build_prop_prompt(prop, style_suffix)
-        try:
-            url = generate_keyframe(
-                prompt,
-                size="1024*1024",
-            )
-            url = _persist_reference_image(url, thread_id, "props", name)
-            sheets["props"][name] = {"url": url, "description": desc, "name_cn": name_cn}
-            print(f"    [OK] Prop sheet: {name}")
-        except Exception as e:
-            print(f"    [WARN] Prop sheet failed for {name}: {e}")
-
-    # ── 生成场景环境参考图 ──
+        jobs.append(("props", prop, _build_prop_prompt(prop, style_suffix)))
     for env in elements.get("environments", []):
-        name = env.get("name", "environment")
-        desc = env.get("description", "")
-        name_cn = env.get("name_cn", "")
-        print(f"    [*] Generating environment reference: {name}" + (f" ({name_cn})" if name_cn else ""))
+        jobs.append(("environments", env, _build_environment_prompt(env, style_suffix)))
 
-        prompt = _build_environment_prompt(env, style_suffix)
-        try:
-            url = generate_keyframe(
-                prompt,
-                size="1024*1024",
+    _REF_SIZE = "1024*1024"
+
+    def _gen_one(category: str, item: dict, prompt: str):
+        name = item.get("name", category.rstrip("s"))
+        # 缓存命中：同 prompt 的参考图跨运行复用，省一次即梦生图额度
+        _hit = _ref_cache_lookup(prompt, _REF_SIZE)
+        if _hit is not None:
+            _media = _local_media_path(_hit) or _persist_reference_image(
+                str(_hit), thread_id, category, name
             )
-            url = _persist_reference_image(url, thread_id, "environments", name)
-            sheets["environments"][name] = {"url": url, "description": desc, "name_cn": name_cn}
-            print(f"    [OK] Environment reference: {name}")
-        except Exception as e:
-            print(f"    [WARN] Environment reference failed for {name}: {e}")
+            print(f"    [CACHE] 参考图命中缓存（跳过生图，省额度）: {category}/{name}")
+            return category, name, _media
+        url = generate_keyframe(prompt, size=_REF_SIZE)
+        url = _persist_reference_image(url, thread_id, category, name)
+        _ref_cache_store(prompt, _REF_SIZE, url)
+        return category, name, url
+
+    max_workers = max(1, min(3, len(jobs)))
+    if jobs:
+        print(f"    [*] 参考图并行生成：{len(jobs)} 张（max_workers={max_workers}）")
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_gen_one, cat, item, pr): (cat, item) for cat, item, pr in jobs}
+        for fut in as_completed(futures):
+            cat, item = futures[fut]
+            name = item.get("name", cat.rstrip("s"))
+            desc = item.get("description", "")
+            name_cn = item.get("name_cn", "")
+            try:
+                _category, _name, url = fut.result()
+                sheets[_category][_name] = {"url": url, "description": desc, "name_cn": name_cn}
+                print(f"    [OK] {_category} sheet: {_name}")
+            except Exception as e:  # noqa: BLE001 — 单张失败不拖垮其余参考图
+                print(f"    [WARN] {cat} sheet failed for {name}: {e}")
 
     return sheets

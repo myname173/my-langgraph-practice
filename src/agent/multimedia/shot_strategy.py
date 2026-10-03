@@ -19,6 +19,7 @@ Shot Strategy Layer (Phase 2)
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -641,8 +642,10 @@ _MOTION_TRAVEL_MAP: List[tuple] = [
     ("近", "closing in toward camera"),
 ]
 
-# 运动时长建议（秒），按运动强度
-_MOTION_DURATION_DEFAULT = "8s"
+# 运动时长建议（秒），按运动强度。
+# 可由 env SHOT_MOTION_DURATION 覆盖，默认与视频时长默认档（8s）保持一致；
+# 仅用于 motion line 文案，不构成实际时间轴（真实时长由 duration_seconds 决定）。
+_MOTION_DURATION_DEFAULT = os.getenv("SHOT_MOTION_DURATION", "8s")
 
 
 def _build_motion_line(shot: Dict[str, Any], script: str) -> str:

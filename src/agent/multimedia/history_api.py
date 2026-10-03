@@ -383,6 +383,41 @@ def _localize_history_urls(
                         sc[field] = m
 
 
+async def _extract_executed_nodes(saver: AsyncSqliteSaver, cfg: dict) -> List[str]:
+    """提取该 thread 已执行过的节点序列（按执行顺序去重）。
+
+    LangGraph 每跑完一个节点会写一个 checkpoint，其 metadata 形如
+    {"source": "loop", "step": n, "writes": {"<node_name>": {...}}}。
+    按时间升序遍历即可还原节点执行轨迹，供前端重建进度时间轴。
+
+    注意 alist 返回顺序为「最新→最旧」，需反转后再处理。
+    """
+    nodes: List[str] = []
+    seen = set()
+    try:
+        history = [t async for t in saver.alist(cfg, limit=_MAX_MERGE_VERSIONS)]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("提取已执行节点时 alist 失败: %s", type(exc).__name__)
+        return nodes
+
+    history.reverse()  # 旧 → 新
+    for tup in history:
+        meta = getattr(tup, "metadata", None) or {}
+        writes = meta.get("writes")
+        if not isinstance(writes, dict):
+            continue
+        for node_name in writes.keys():
+            if (
+                isinstance(node_name, str)
+                and node_name
+                and not node_name.startswith("__")
+                and node_name not in seen
+            ):
+                seen.add(node_name)
+                nodes.append(node_name)
+    return nodes
+
+
 async def _build_merged_values(saver: AsyncSqliteSaver, cfg: dict, latest: Any) -> Any:
     """构建“合并产物视图”的 channel_values，用于历史展示。
 
@@ -823,6 +858,22 @@ async def get_history_thread(thread_id: str) -> dict[str, Any]:
     ):
         current_scene_index = total_scenes - 1
 
+    # 【修复】历史会话丢失进度时间轴：
+    # 前端 loadThread 后只能拿到 next 节点，无法还原"已跑过哪些节点"，
+    # 导致点开历史任务进度条全空。这里从该 thread 全部 checkpoint 的
+    # metadata.writes 中按 step 升序提取已执行节点序列，供前端重建时间轴。
+    executed_nodes: List[str] = []
+    try:
+        async with _SaverSession() as saver:
+            executed_nodes = await _extract_executed_nodes(
+                saver, {"configurable": {"thread_id": thread_id}}
+            )
+    except Exception as exc:  # noqa: BLE001
+        # 进度时间轴是展示增强，失败不得影响主数据返回
+        logger.warning(
+            "提取已执行节点失败 thread_id=%s: %s", thread_id, exc
+        )
+
     return {
         "thread_id": thread_id,
         "checkpoint_id": checkpoint.get("id"),
@@ -830,6 +881,7 @@ async def get_history_thread(thread_id: str) -> dict[str, Any]:
         "values": values,
         "progress": {
             "next": next_nodes,
+            "executed_nodes": executed_nodes,
             "current_scene_index": current_scene_index,
             "total_scenes": total_scenes,
             "step": (latest_tup.metadata or {}).get("step"),

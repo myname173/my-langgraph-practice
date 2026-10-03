@@ -147,8 +147,8 @@ def download_video(url: str, filename: str, retries: int = 3):
 
     for attempt in range(retries):
         try:
-            response = requests.get(url, stream=True, timeout=120)
-            response.raise_for_status()
+            from . import net as _net
+            response = _net.fetch_response(url, stream=True, timeout=120, label="片段下载")
 
             with open(filename, "wb") as f:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -461,11 +461,52 @@ def _generate_filename(task: str = "", timestamp: Optional[datetime] = None) -> 
 # ==============================
 # 主拼接逻辑
 # ==============================
+def _compute_segment_starts(
+    clips: list,
+    transitions: list,
+    transition_duration: float = _DEFAULT_TRANSITION_DURATION,
+) -> list:
+    """计算每个片段在成片中的真实起始时间（秒）。
+
+    与 _build_with_transitions 的重叠规则严格一致：转场会让前后片段重叠，
+    成片总长 = Σ片段时长 − Σ重叠。字幕时间轴必须用这里的 start 排布，
+    否则「时长累加」会让越靠后的字幕前移偏差越大、末条超出片尾。
+
+    Args:
+        clips: 已构建的片段列表
+        transitions: 相邻片段之间的转场类型列表（长度 n-1）
+        transition_duration: 转场时长
+
+    Returns:
+        每个片段的起始秒数列表（长度与 clips 相同）
+    """
+    n = len(clips)
+    starts = []
+    t = 0.0
+    for i in range(n):
+        starts.append(t)
+        if i >= n - 1:
+            break
+        trans = transitions[i] if i < len(transitions) else "hard_cut"
+        dur = clips[i].duration or 0.0
+        if trans == "whip_pan":
+            t += dur - _WHIP_PAN_DURATION
+        elif trans == "camera_carry":
+            t += dur - transition_duration * 1.5
+        elif trans in ("dissolve", "fade_through_black"):
+            t += dur - transition_duration
+        else:
+            # hard_cut / smash_cut: 无重叠
+            t += dur
+    return starts
+
+
 def stitch_videos(
     video_urls: List[str],
     output_filename: str = "",
     transitions: Optional[List[str]] = None,
     transition_duration: float = _DEFAULT_TRANSITION_DURATION,
+    beat_grid: Optional[float] = None,
 ) -> str:
     """
     下载并拼接视频片段，支持 6 种转场效果和自动色彩统一。
@@ -552,6 +593,23 @@ def stitch_videos(
                 print(f"    [处理] 镜头 {i+1} 标准化")
 
                 clip = normalize_clip(clip)
+
+                # P1-2：卡点对齐（可选，MULTIMEDIA_BEAT_GRID 开启）——
+                # 把每段微调到节拍网格（只剪不补，最多剪 0.6s），让切点落在
+                # 节拍线上。segment_durations/starts 基于修剪后的 clips 计算，
+                # 字幕/配音对齐自动跟随，无需额外处理。
+                if beat_grid and beat_grid >= 0.2:
+                    import math as _math
+                    _d = float(clip.duration or 0.0)
+                    _k = int(_math.floor(_d / beat_grid))
+                    if _k >= 2:
+                        _target = _k * beat_grid
+                        if _d - _target >= 0.08:
+                            try:
+                                clip = clip.subclipped(0, _target)
+                                print(f"    [P1-2] 镜头 {i+1} 卡点对齐: {_d:.2f}s → {_target:.2f}s (grid={beat_grid}s)")
+                            except Exception as _e:
+                                print(f"    [WARN] 卡点对齐失败，保留原时长: {_e}")
 
                 clips.append(clip)
                 valid_indices.append(i)
@@ -641,7 +699,13 @@ def stitch_videos(
         # P1 字幕精确对齐：返回各有效片段的真实时长（秒），顺序与 valid_indices 对应。
         # 供 stitcher_node 写回 scene["video_duration"]，使 build_srt 按真实时长对齐字幕。
         segment_durations = [c.duration for c in clips]
-        return abs_path, valid_indices, segment_durations
+        # 【修复】同时回写每个片段在成片中的真实起始时间（已扣除转场重叠）。
+        # 成片总长 = Σ片段时长 − Σ转场重叠，若字幕仍用「时长累加」排布，
+        # 越靠后的字幕前移偏差越大、末条会超出片尾。有了真实 start 即可精确对齐。
+        segment_starts = _compute_segment_starts(
+            clips, clip_transitions if len(clips) > 1 else [], transition_duration
+        )
+        return abs_path, valid_indices, segment_durations, segment_starts
 
     except Exception as e:
         print(f"    [ERROR] Stitching failed: {str(e)}")

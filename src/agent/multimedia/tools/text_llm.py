@@ -1,6 +1,7 @@
 # src/agent/multimedia/tools/text_llm.py
 import os
 import time
+import threading
 from openai import OpenAI
 from openai import APITimeoutError
 from dotenv import load_dotenv
@@ -25,6 +26,9 @@ def sprint(*args, **kwargs):
 # read 超时（read 是“两次读取间隔”语义，不限制总时长），导致 DashScope 慢速
 # 流式响应永远不触发超时而永久挂起。只用 SDK 的 timeout 参数即可正确限制总时长。
 _LLM_TIMEOUT = 300.0
+# 看门狗宽限期：内层流式循环自己会在 _LLM_TIMEOUT 时抛超时，
+# 外层看门狗只在"循环完全卡死、内层判断执行不到"时兜底，故留一点余量。
+_WATCHDOG_GRACE = 20.0
 _MAX_LLM_RETRIES = 4
 # 免费层为共享限流，瞬时 403（FreeTierOnly）频发；拉长退避让限流窗口过去，
 # 避免在长 pipeline 里第一轮全 403 就被逐个禁用、连锁 FATAL。
@@ -62,6 +66,70 @@ _SILICONFLOW_FALLBACK_MODELS = list(
     ])
 )
 
+# ── 额外文本通道（env 驱动，任意 OpenAI 兼容端点）──────────────────────────
+# 用途：当 DashScope / SiliconFlow 均不可用（额度耗尽 / Key 失效）时，用环境变量
+# 注入可用通道，无需改代码。示例（DeepSeek 官方 / 智谱 GLM）：
+#   MULTIMEDIA_LLM2_BASE_URL=https://api.deepseek.com
+#   MULTIMEDIA_LLM2_API_KEY=sk-xxx
+#   MULTIMEDIA_LLM2_MODELS=deepseek-chat
+#   MULTIMEDIA_LLM2_LABEL=deepseek
+# 显式配置的通道**优先于**内置链（视为首选渠道）。
+def _build_extra_llm_channels():
+    chans = []
+    for n in ("2", "3", "4"):
+        base = (os.getenv(f"MULTIMEDIA_LLM{n}_BASE_URL", "") or "").strip()
+        key = (os.getenv(f"MULTIMEDIA_LLM{n}_API_KEY", "") or "").strip()
+        models = [m.strip() for m in (os.getenv(f"MULTIMEDIA_LLM{n}_MODELS", "") or "").split(",") if m.strip()]
+        if base and key and models:
+            try:
+                _cli = OpenAI(api_key=key, base_url=base, timeout=_LLM_TIMEOUT)
+                _lbl = (os.getenv(f"MULTIMEDIA_LLM{n}_LABEL", "") or f"extra{n}").strip()
+                chans.append((_lbl, _cli, models))
+            except Exception as _e:  # noqa: BLE001
+                sprint(f"    [WARN] 额外文本通道 {n} 初始化失败: {_e}")
+    return chans
+
+
+_EXTRA_LLM_CHANNELS = _build_extra_llm_channels()
+
+def _call_with_watchdog(fn, timeout: float, desc: str = ""):
+    """在 daemon 线程里执行 fn，主线程 join(timeout) 等待；超时则放弃并抛 APITimeoutError。
+
+    为什么必需（实测踩坑）：
+      流式读取写作 `for chunk in stream: if 超时: raise`，一旦服务端建立连接后
+      **完全不吐数据**，`for` 会永久阻塞在迭代器等待上，循环体一次都不会执行，
+      写在里面的超时判断就成了摆设——整条 pipeline 挂死（实测卡死 8 分钟以上，
+      日志停在最后一次 HTTP 200 再无输出，进程活着但 CPU 近乎为 0）。
+
+      看门狗把超时判定放在**主线程 join** 上，不依赖流是否有数据推进，
+      因此能真正兜住"连接建立后静默挂起"这种最恶劣的情况。
+
+    权衡：
+      Python 无法安全强杀线程。超时后该线程仍在后台（daemon，随进程退出而不
+      阻塞退出）。这是可接受的代价——保住的是整条 pipeline 不挂死，
+      且 APITimeoutError 会被上层判定为可重试，自动切下一个 fallback 模型。
+    """
+    box: dict = {}
+
+    def _run():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - 需原样透传给主线程判断
+            box["error"] = exc
+
+    t = threading.Thread(target=_run, daemon=True, name=f"llm-wd-{desc}")
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise APITimeoutError(
+            f"总时长超过 {timeout:.0f}s 未返回（{desc}）；"
+            f"看门狗已放弃等待并切换候选模型（后台线程将随进程退出）"
+        )
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
 def _is_retryable_llm_error(exc: Exception) -> bool:
     """判断是否为可重试的 LLM 调用瞬断错误。
 
@@ -71,6 +139,19 @@ def _is_retryable_llm_error(exc: Exception) -> bool:
     / limit 也纳入可重试集合。
     """
     err_str = str(exc).lower()
+    # 【修复】403 PermissionDenied / FreeTierOnly 是"该模型无权限/额度"，
+    # 重试多少次都不会变（不是瞬时抖动）。此前 403 会落入下面 "400"/"quota"/
+    # "limit" 子串命中而被判为"可重试"，导致每个模型都要走满 4 级退避
+    # （8+15+25+40 = 88 秒）才肯切换下一个模型。整条 fallback 链 6 个模型
+    # 就是 ~9 分钟纯等待，长 pipeline 里表现得像"卡死"。
+    # 这里显式识别并判为不可重试 → 立即禁用该模型并切下一个。
+    non_retryable_keywords = [
+        "403", "permissiondenied", "permission denied",
+        "forbidden", "unauthorized", "401", "invalid api key",
+        "authentication", "not authorized",
+    ]
+    if any(kw in err_str for kw in non_retryable_keywords):
+        return False
     # 超时、限流、服务端错误、免费额度瞬时限额都是可重试/可切换的
     retryable_keywords = [
         "timed out", "timeout", "rate limit", "rate_limit",
@@ -90,11 +171,13 @@ def _is_retryable_llm_error(exc: Exception) -> bool:
 # qwen3.7-max-preview 等已被免费额度耗尽 403，必须放到列表外，否则一上来就卡死）。
 # 经探测当前免费层可用的 DashScope 文本模型：qwen3.7-max-2026-06-08 / qwen-plus /
 # qwen-max。.env 的 DASHSCOPE_TEXT_MODEL 指向可用模型，其余仅作兜底。
+# 免费额度耗尽降级：qwen3.8-flash（flash 系列带免费额度）作为兜底切换。
 _LLM_FALLBACK_MODELS = [
     "qwen3.7-max-2026-06-08",                   # 免费层实测可用（qwen3.7-max 系列稳定档）
     "qwen-plus",                                # 免费层实测可用
     "qwen-max",                                 # 免费层实测可用（语义最强）
     "qwen3.8-2.4t-a95b",                        # 小模型兜底：确认有免费额度时启用
+    "qwen3.8-flash",                            # 文本模型免费额度耗尽时的降级档（flash 系列有免费额度）
     os.getenv("DASHSCOPE_TEXT_MODEL"),          # 仅作最后兜底（指向可用模型，避免 403 循环）
 ]
 # 去空（覆盖变量未设置时）并保持顺序去重
@@ -152,6 +235,10 @@ def call_llm(prompt_text: str, role_name: str = "LLM", max_tokens: int | None = 
     _llm_chain = [(m, client, m) for m in _LLM_FALLBACK_MODELS]
     if _sf_client is not None:
         _llm_chain += [("siliconflow", _sf_client, m) for m in _SILICONFLOW_FALLBACK_MODELS if m]
+    # 额外通道（env 注入）优先放链首：显式配置即首选渠道。
+    if _EXTRA_LLM_CHANNELS:
+        _extra = [(_lbl, _cli2, m) for (_lbl, _cli2, _mods) in _EXTRA_LLM_CHANNELS for m in _mods]
+        _llm_chain = _extra + _llm_chain
 
     # 外层：一轮 fallback 遍历；若全部临时禁用（网络抖动典型场景）则等待解禁后重试整轮
     _round = 0
@@ -167,42 +254,56 @@ def call_llm(prompt_text: str, role_name: str = "LLM", max_tokens: int | None = 
             disabled = False
             for attempt in range(_MAX_LLM_RETRIES + 1):
                 try:
-                    # 使用流式 + 总时长累计超时：DashScope 兼容端点对长生成会“慢速持续吐数据”，
-                    # 导致 httpx 的 read timeout（间隔语义）永远不触发、请求永久挂起。
-                    # 流式逐 chunk 读取，用 time.monotonic() 累计总时长，超时就主动断开并抛超时。
-                    start = time.monotonic()
-                    stream = _cli.chat.completions.create(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt_text}],
-                        temperature=temperature,
-                        top_p=0.95,
-                        presence_penalty=0.2,
-                        max_tokens=max_tokens,
-                        stream=True,
-                    )
-                    pieces = []
-                    for chunk in stream:
-                        if time.monotonic() - start > _LLM_TIMEOUT:
+                    # 使用流式 + 【看门狗】硬超时：
+                    # 1) 流式逐 chunk 读取 + 累计总时长超时（应对"慢速持续吐数据"，
+                    #    httpx 的 read timeout 是"两次读取间隔"语义，不限制总时长）；
+                    # 2) 但仅靠循环体内的计时是不够的——若服务端建立连接后**完全不吐数据**，
+                    #    `for chunk in stream` 会永久阻塞在迭代器等待上，循环体永不执行，
+                    #    超时判断形同虚设（实测：整轮 pipeline 挂死 8 分钟以上无任何日志）。
+                    #    故外层再用看门狗线程包一层，超时后主线程直接放弃并切下一个模型。
+                    def _stream_collect():
+                        start = time.monotonic()
+                        stream = _cli.chat.completions.create(
+                            model=model,
+                            messages=[{"role": "user", "content": prompt_text}],
+                            temperature=temperature,
+                            top_p=0.95,
+                            presence_penalty=0.2,
+                            max_tokens=max_tokens,
+                            stream=True,
+                        )
+                        pieces = []
+                        try:
+                            for chunk in stream:
+                                if time.monotonic() - start > _LLM_TIMEOUT:
+                                    raise APITimeoutError(
+                                        f"总时长超过 {_LLM_TIMEOUT:.0f}s 未生成完成（模型 {model}）"
+                                    )
+                                if not chunk.choices:
+                                    continue
+                                delta = chunk.choices[0].delta
+                                if delta and delta.content:
+                                    pieces.append(delta.content)
+                        finally:
                             try:
                                 stream.close()
                             except Exception:
                                 pass
-                            raise APITimeoutError(
-                                f"总时长超过 {_LLM_TIMEOUT:.0f}s 未生成完成（模型 {model}）"
-                            )
-                        if not chunk.choices:
-                            continue
-                        delta = chunk.choices[0].delta
-                        if delta and delta.content:
-                            pieces.append(delta.content)
+                        return "".join(pieces).strip()
+
+                    _collected = _call_with_watchdog(
+                        _stream_collect,
+                        timeout=_LLM_TIMEOUT + _WATCHDOG_GRACE,
+                        desc=f"{role_name}/{model}",
+                    )
                     if _provider == "siliconflow":
                         sprint(f"    [OK] [{role_name}] 已通过 SiliconFlow 兜底模型 {model} 完成输出（DashScope 额度耗尽或不可用）")
                     try:
                         with open(_llog, "a", encoding="utf-8") as _lf:
-                            _lf.write(f"[ok] role={role_name} model={model} len={len(''.join(pieces))}\n"); _lf.flush()
+                            _lf.write(f"[ok] role={role_name} model={model} len={len(_collected or '')}\n"); _lf.flush()
                     except Exception:
                         pass
-                    return "".join(pieces).strip()
+                    return _collected
 
                 except Exception as e:
                     last_err = e

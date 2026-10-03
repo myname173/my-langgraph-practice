@@ -99,11 +99,20 @@ def make_text_clip(
     return TextClip(**kw)
 
 
+# P2-1 字幕主题：color/stroke/字号缩放/底部位置（0-1 相对高度）
+_SUBTITLE_THEMES: Dict[str, Dict[str, Any]] = {
+    "default": {"color": "white", "stroke_color": "black", "stroke_width": 1.2, "scale": 1.0, "bottom": 0.92},
+    "minimal": {"color": "#E6E6E6", "stroke_color": "#101010", "stroke_width": 0.0, "scale": 0.85, "bottom": 0.95},
+    "cinema": {"color": "#F5D76E", "stroke_color": "#141414", "stroke_width": 1.8, "scale": 1.18, "bottom": 0.88},
+}
+
+
 def burn_subtitles(
     video_path: str,
     srt_path: str,
     font_size: int = 28,
     out_path: Optional[str] = None,
+    theme: str = "default",
 ) -> str:
     """兼容 moviepy 1.x/2.x 的字幕烧录：把 SRT 烧录进视频，返回带字幕的视频路径。
 
@@ -128,6 +137,9 @@ def burn_subtitles(
     if not font_path:
         raise RuntimeError("未找到可用中文字体，无法烧录字幕。请安装 微软雅黑/黑体 等中文字体。")
 
+    th = _SUBTITLE_THEMES.get((theme or "default").strip().lower(), _SUBTITLE_THEMES["default"])
+    _fs = max(int(round(font_size * th["scale"])), 12)
+
     video = VideoFileClip(video_path)
 
     def _make_clip(txt: str):
@@ -135,10 +147,10 @@ def burn_subtitles(
         return TextClip(
             text=txt,
             font=font_path,
-            font_size=font_size,
-            color="white",
-            stroke_color="black",
-            stroke_width=1.2,
+            font_size=_fs,
+            color=th["color"],
+            stroke_color=th["stroke_color"],
+            stroke_width=th["stroke_width"],
             size=(int(video.w * 0.9), None),
             method="caption",
         )
@@ -152,10 +164,11 @@ def burn_subtitles(
         subtitles = SubtitlesClip(srt_path, font=_make_clip, encoding="utf-8")
 
     # 定位兼容 1.x(set_position)/2.x(with_position)
+    _bottom = th.get("bottom", 0.92)
     subtitles_pos = (
-        subtitles.with_position(("center", "bottom"))
+        subtitles.with_position(("center", _bottom), relative=True)
         if is_mpy2
-        else subtitles.set_position(("center", "bottom"))
+        else subtitles.set_position(("center", _bottom), relative=True)
     )
     result = CompositeVideoClip([video, subtitles_pos])
 

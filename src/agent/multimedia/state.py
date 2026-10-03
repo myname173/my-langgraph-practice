@@ -1,5 +1,63 @@
 # src/agent/multimedia/state.py
-from typing import TypedDict, List, Optional, Dict, Any
+from typing import Annotated, TypedDict, List, Optional, Dict, Any
+
+
+# ── P0-2（架构评审）：Send 扇出并行归并 reducer ─────────────────────────────
+# 串行模式下单写者语义不变；并行模式下多个 shot 分支各自只写自己的槽位，
+# 归并规则保证「谁的槽位谁做主」，其余槽位不被过期副本回滚。
+
+def merge_scenes_by_index(
+    left: Optional[List[Dict[str, Any]]],
+    right: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """scenes 按 index 合并：right 中「发生变化的槽位」覆盖 left，其余保留 left。"""
+    if not left:
+        return list(right or [])
+    if not right:
+        return list(left)
+    out = list(left)
+    while len(out) < len(right):
+        out.append({})
+    for i, d in enumerate(right):
+        if i < len(out) and d != out[i]:
+            # right 的该槽位与 left 不同 → 视为写入，覆盖（分支只写自己的镜头）。
+            # 并行时若两分支同写一个 index（不应发生），后完成者胜。
+            out[i] = d
+    return out
+
+
+def merge_dicts_shallow(left, right):
+    """dict 浅合并（right 覆盖同 key）：用于按 shot_index 键控的并行结果归并。"""
+    out = dict(left or {})
+    out.update(right or {})
+    return out
+
+
+def any_true(left, right):
+    """布尔取或：并行分支任一 True 即 True（aborted / shot_failed 语义）。"""
+    return bool(left) or bool(right)
+
+
+def keep_non_empty(left, right):
+    """字符串保留非空：None/空 不覆盖已有值（abort_reason 语义）。"""
+    if right is None or right == "":
+        return left
+    return right
+
+
+def union_list(left, right):
+    """列表按序去重合并（quota_exhausted_scenes / locked_scenes 语义）。"""
+    out = list(left or [])
+    for x in (right or []):
+        if x not in out:
+            out.append(x)
+    return out
+
+
+def max_value(left, right):
+    """数值取最大（rewrite_count 并行分支计数归并；该计数只增不复位）。"""
+    return max(int(left or 0), int(right or 0))
+
 
 
 class MultimediaState(TypedDict):
@@ -8,10 +66,10 @@ class MultimediaState(TypedDict):
     """
     task: str
     global_setting: str
-    scenes: List[Dict[str, Any]]
+    scenes: Annotated[List[Dict[str, Any]], merge_scenes_by_index]
     current_scene_index: int
     final_movie_path: Optional[str]
-    error_log: Optional[str]
+    error_log: Annotated[Optional[str], keep_non_empty]
 
     # ── P0 音频闭环（配音 + 字幕 + 混音）──
     audio_track: Optional[str]               # 配音音频本地路径 (.mp3)
@@ -24,10 +82,12 @@ class MultimediaState(TypedDict):
     voice_role: Optional[str]                # 配音音色 key（见 tts.EDGE_TTS_VOICES_ZH）
     enable_audio: Optional[bool]             # 音频闭环总开关（前端控制，默认开启）
     bgm_mood: Optional[str]                  # BGM 情绪标签（如 ambient/tense/upbeat）
+    # P2-1：成片包装——片头片尾卡开关（前端 TaskLauncher / env MULTIMEDIA_TITLE_CARD）
+    title_card: Optional[bool]
     prefer_native_audio: Optional[bool]      # 原生音轨优先（即梦等模型自带声音时，跳过本地TTS/BGM混音，仅烧字幕）
     
     # 新增：是否启用首尾帧双控模式
-    use_first_last_frame: bool
+    use_first_last_frame: Annotated[bool, any_true]
 
     # 视觉风格（Style Registry）
     # 由 _extract_visual_style（LLM 抽取）从用户输入中识别，存储 _STYLE_PRESETS 的 key，
@@ -47,6 +107,19 @@ class MultimediaState(TypedDict):
     # 决定视频的结构形态和叙事节奏模式
     content_type: Optional[str]
 
+    # ── P2-5：叙事结构参数化（目标时长 / 连续剧集）──
+    # target_duration：目标成片总时长（秒）。showrunner 据此反推镜头数
+    #   （见 tools/narrative.plan_scene_count），取代此前硬编码的固定镜头数。
+    target_duration: Optional[float]
+    # episode：连续剧集数（>=1，缺省 1）。>1 时注入「承接上集 / 留下集钩子」提示。
+    episode: Optional[int]
+    # episode_anchors：上一集的 end_state 锚点（scene_anchors 快照），
+    #   本集首镜据此承接；跨集连续性由此打通。
+    episode_anchors: Optional[Dict[str, Any]]
+    # series_assets：跨集复用的资产库（reference_sheets 集合，存于 run 目录之外的
+    #   资产库）；本集若有则直接复用，省额度且保持角色/场景一致。
+    series_assets: Optional[Dict[str, Any]]
+
     # Phase 1: Visual Context Retrieval Layer
     # 由 visual_context_builder 节点生成，供 director 节点消费
     visual_context: Optional[Dict[str, Any]]
@@ -63,7 +136,7 @@ class MultimediaState(TypedDict):
     # 由 cinematic_critic 节点生成，包含质量评估、问题检测和优化建议
     critic_eval: Optional[Dict[str, Any]]
     quality_gates: Optional[Dict[str, Any]]
-    rewrite_count: int
+    rewrite_count: Annotated[int, max_value]
 
     # Phase 5: Multi-Agent Film Studio System
     # 由 film_studio 节点生成，包含多 Agent 协作优化的结果
@@ -120,8 +193,8 @@ class MultimediaState(TypedDict):
     asset_match_report: Optional[Dict[str, Any]]
 
     # 任务控制
-    aborted: bool
-    abort_reason: Optional[str]
+    aborted: Annotated[bool, any_true]
+    abort_reason: Annotated[Optional[str], keep_non_empty]
 
     # 低干预 / 自动模式：为真时跳过 6 道人工审核闸口（直接以 approve 放行），
     # 普通用户免逐镜点击；专业用户默认 False 走人审闭环。
@@ -129,10 +202,52 @@ class MultimediaState(TypedDict):
 
     # 成片草稿审片（stitcher 之后、audio_mixer 之前的「无声粗剪」确认闸口）决策：
     # approve → 进入音频混音；rewrite → 回到 stitcher 重拼。仅 enable_audio 且非 auto_mode 时触发。
+    # P1-2：成片 Critic 报告（抽帧复审节奏/连续性/画质），随草稿审片卡展示
+    draft_critic_report: Optional[Dict[str, Any]]
     draft_decision: Optional[str]
 
     # 视频免费额度耗尽降级的镜头索引列表（供最终摘要如实报告，避免全局中止浪费已生成产物）
-    quota_exhausted_scenes: Optional[List[int]]
+    quota_exhausted_scenes: Annotated[Optional[List[int]], union_list]
 
     # 审核视觉模型是否不可用（如免费额度耗尽 403）：不可用时应跳过"一致性强制重生"等依赖 VLM 的无效重试
+    reviewer_unavailable: Annotated[Optional[bool], any_true]
+
+    # ── S1（架构评审 P0-1）：质量档位 fast / standard / cinema ──
+    # 由前端任务创建面板或 QUALITY_TIER 环境变量注入；决定视频后端候选顺序与时长策略。
+    quality_tier: Optional[str]
+    # ── S1（架构评审 P0-1）：已锁定镜头索引列表 ──
+    # video_review 门控通过并勾选「锁定」时写入；locked 镜头在 video_gen_node 跳过再生成，
+    # 重跑/续跑直接复用既有视频，不再消耗视频额度。
+    locked_scenes: Annotated[Optional[List[int]], union_list]
+
+
+    # ── P0-2（架构评审）：镜头级并行（Send fan-out）归并通道 ──
+    # shot_chain 子图每分支输出 {str(shot_index): ...}，由 shots_collected 汇合。
+    # 分支私有 state 不携带全量 scenes，规避过期副本回滚（详见 graph._shot_rehydrate）。
+    scene_results: Annotated[Optional[Dict[str, Dict[str, Any]]], merge_dicts_shallow]
+    branch_results: Annotated[Optional[Dict[str, Dict[str, Any]]], merge_dicts_shallow]
+
+
+class ShotState(TypedDict, total=False):
+    """单镜头分支（shot_chain subgraph）的私有状态。
+
+    - scene:      当前镜头的可变工作副本（分支内各节点累积更新）
+    - ctx:        扇出时注入的只读共享上下文快照（plan/风格/参考图/全片 scenes 等）
+    - 其余:       分支私有控制流字段；子图结束后经 _shot_collect 折叠回主图。
+    分支内复用现有节点函数：节点收到的是 _shot_rehydrate 还原的
+    MultimediaState 视图，写回时只取回自己的镜头槽位。
+    """
+    shot_index: int
+    scene: Dict[str, Any]
+    ctx: Dict[str, Any]
+    aborted: bool
+    abort_reason: Optional[str]
+    shot_failed: bool
+    error_log: Optional[str]
     reviewer_unavailable: Optional[bool]
+    rewrite_count: int
+    quota_exhausted: List[int]
+    use_first_last_frame: bool
+    asset_match_report: Dict[str, Any]
+    scene_results: Dict[str, Dict[str, Any]]
+    branch_results: Dict[str, Dict[str, Any]]

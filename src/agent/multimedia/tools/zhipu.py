@@ -22,7 +22,7 @@ import requests
 
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 _ZHIPU_BASE = os.getenv("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
 _ZHIPU_MODEL = os.getenv("ZHIPU_VIDEO_MODEL", "cogvideox-flash").strip()
@@ -107,7 +107,7 @@ def generate_video(
         duration = 5
 
     body: dict = {
-        "model": _ZHIPU_MODEL,
+        "model": (os.getenv("ZHIPU_VIDEO_MODEL") or _ZHIPU_MODEL).strip(),
         "prompt": prompt,
         "size": size,
         "duration": duration,
@@ -199,8 +199,9 @@ def generate_video(
             vid_url = vres[0].get("url") or (vres[0].get("cover_image_url") or "")
             if not vid_url:
                 raise ZhipuQuotaError(f"智谱完成但无视频 URL: {str(presult)[:200]}")
-            vr = session.get(vid_url, timeout=timeout)
-            vr.raise_for_status()
+            from . import net as _net
+            _vid_bytes = _net.fetch_bytes(vid_url, timeout=timeout, label="智谱视频下载")
+            vr = type("R", (), {"content": _vid_bytes})()
             with open(out_path, "wb") as f:
                 f.write(vr.content)
             print(f"    [OK][Zhipu] 视频完成: {out_path}")

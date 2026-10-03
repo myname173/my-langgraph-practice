@@ -30,6 +30,7 @@ from __future__ import annotations
 import base64
 import itertools
 import os
+import re
 import time
 import requests
 from pathlib import Path
@@ -40,10 +41,26 @@ PROJECT_ROOT = Path(__file__).resolve().parents[4]
 
 # 注意：不要从 video_gen 导入，避免循环依赖（video_gen 已 import 本模块）。
 # 这里自带轻量网络重试，复用项目既有的退避风格。
+def _is_unretryable_jimeng_error(msg: str) -> bool:
+    """判断是否为「重试也不会成功」的即梦错误（免费额度/节点拒绝类）。
+
+    实测：即梦免费档在 img2img 额度耗尽/并发受限时，会对每个请求返回
+    code=-2001 且 message 形如 "InvalidNode, nodeID=<每次都变>: invalid node"。
+    该 nodeID 由服务端为"被拒请求"新建（每次不同），说明是服务端侧的额度/限流拒绝，
+    而非我方请求参数错误——重试只会新建更多被拒节点，且高频重试会加剧限流。
+    此类错误应立即失败，交由上层跳过/降级，避免整条流水线空耗数小时。
+    """
+    low = (msg or "").lower()
+    return ("invalidnode" in low) or ("invalid node" in low)
+
+
 def _retry_request(fn, max_retries: int = 3, backoff: list = None, label: str = "", _check_body: bool = False):
     """fn 返回 requests.Response。_check_body=True 时，HTTP 200 但响应体含错误码也视为
     失败并重试（即梦代理常把「积分不足/权益不足」「队列满」等以 HTTP 200 + code=-2001/-1000
-    返回，需当作可重试错误而非成功）。"""
+    返回，需当作可重试错误而非成功）。
+
+    例外：InvalidNode / invalid node 属服务端额度拒绝，重试无用且加剧限流，立即抛出。
+    """
     backoff = backoff or [2, 5, 10]
     last = None
     for i in range(max_retries + 1):
@@ -67,6 +84,11 @@ def _retry_request(fn, max_retries: int = 3, backoff: list = None, label: str = 
             return resp
         except Exception as e:  # 网络级异常 或 错误体触发的重试
             last = e
+            # 【额度拒绝短路】InvalidNode 为服务端免费额度/限流拒绝，重试无用且会加剧限流，
+            # 立即抛出交由上层跳过该镜头，避免多层重试把整条流水线拖死数小时。
+            if _is_unretryable_jimeng_error(str(e)):
+                print(f"    [SKIP] 即梦 {label} 命中不可重试错误（免费额度/节点拒绝），立即停止重试: {str(e)[:80]}")
+                raise
             if i < max_retries:
                 wait = backoff[min(i, len(backoff) - 1)]
                 print(f"    [WARN] 即梦 {label} 重试 ({type(e).__name__}: {str(e)[:60]})，{wait}s 后重试 ({i+1}/{max_retries})...")
@@ -96,6 +118,95 @@ def _size_to_ratio(size: str) -> str:
     return table.get(s, "1:1")
 
 
+# 【修复-H】即梦免费代理对 prompt 长度有硬上限，超限会返回 -2001 InvalidNode。
+# 实测（2026-08-30，二分定位）：1556 字 OK，1659 字 FAIL，1762 字 FAIL → 上限约 1600 字。
+# 项目导演会拼装「主体描述 + 风格后缀 + 角色锚点 + 镜头语言 + Avoid 清单」，
+# 实测关键帧 prompt 常达数千字 → 必然 InvalidNode。
+# 这正是此前"整轮关键帧 100% 失败"而独立探活脚本（短 prompt）100% 成功的根因。
+# 取 1500 为默认安全线（留 ~6% 余量），可用 JIMENG_PROMPT_MAX_CHARS 覆盖。
+_PROMPT_MAX_CHARS = int(os.getenv("JIMENG_PROMPT_MAX_CHARS", "1500"))
+# 优先保留的结构化块（语义权重高，截断时优先抢救）
+_KEEP_BLOCK_PAT = re.compile(r"\[[^\]]*\]", re.S)
+# 防穿模块标识：在任何截断下都最高优先保活（见 _fit_prompt 优先级逻辑）。
+# 必须在 graph 注入的防穿模块前缀与此一致。
+_ANTI_DEFORMATION_PREFIX = "Anti-Deformation"
+_CHAR_ANCHOR_PREFIX = "Character Identity Anchor"
+
+
+def _fit_prompt(prompt: str, max_chars: int = None) -> str:
+    """把 prompt 压缩到即梦可接受的长度，且尽量保住语义关键部分。
+
+    策略（不是简单截断，避免把最重要的信息砍掉）：
+      1. 抽出所有 [xxx] 结构化块，按优先级排序：
+         高优 → [Anti-Deformation]（防穿模，必须保留，否则角色肢体畸变）
+              → [Character Identity Anchor]（角色锚定，必须保留，否则面目全非）
+         其余 [xxx] 块（Camera / Avoid / Style 等）按出现顺序，塞得下才留；
+      2. 主体正文按剩余预算截断（保留开头——主体与主体动作通常写在最前）；
+      3. 仅当防穿模块 + 角色锚定已保活、且还有预算时，才塞入其余结构化块。
+
+    极端情况（单个块就超预算）直接硬截断，保证一定不超限。
+    """
+    max_chars = int(max_chars or _PROMPT_MAX_CHARS)
+    if max_chars <= 0:
+        return prompt
+    p = (prompt or "").strip()
+    if len(p) <= max_chars:
+        return p
+
+    blocks = [re.sub(r"\s+", " ", b).strip() for b in _KEEP_BLOCK_PAT.findall(p)]
+    # 去重（同一块可能重复出现，如多角色锚定保留一处即可；防穿模块只留一处）
+    seen = set()
+    uniq = []
+    for b in blocks:
+        if b not in seen:
+            seen.add(b)
+            uniq.append(b)
+
+    def _pri(b: str) -> int:
+        if b.startswith("[" + _ANTI_DEFORMATION_PREFIX):
+            return 0
+        if b.startswith("[" + _CHAR_ANCHOR_PREFIX):
+            return 1
+        return 2
+
+    hi = sorted([b for b in uniq if _pri(b) < 2], key=_pri)          # 防穿模 + 角色锚定
+    others = [b for b in uniq if _pri(b) == 2]                        # 其余块
+
+    body = _KEEP_BLOCK_PAT.sub(" ", p)
+    body = re.sub(r"\s+", " ", body).strip()
+
+    budget = max_chars
+    kept = []
+
+    # 第一优先：保活防穿模块 + 角色锚定（无论怎样都塞，塞不下也不丢）
+    for b in hi:
+        kept.append(b)
+        budget -= len(b) + 1
+
+    # 第二优先：其余结构化块（塞得下才留）
+    for b in others:
+        if len(b) + 1 <= budget:
+            kept.append(b)
+            budget -= len(b) + 1
+
+    # 主体至少保留一部分；若结构化块把预算吃光，则只留极少主体
+    body_budget = max(budget - 1, 0)
+    body_kept = body[:body_budget].strip()
+
+    parts = [body_kept] + kept
+    out = " ".join(x for x in parts if x).strip()
+
+    # 兜底硬截断（理论上不会触发，防结构化块异常巨大）
+    if len(out) > max_chars:
+        out = out[:max_chars].strip()
+
+    print(
+        f"    [jimeng] prompt 超长已压缩: {len(p)} -> {len(out)} 字"
+        f"（上限 {max_chars}），保留 {len(kept)} 个结构化块"
+    )
+    return out
+
+
 def _session_ids() -> list:
     raw = os.getenv("JIMENG_SESSION_ID", "").strip()
     if not raw:
@@ -122,7 +233,7 @@ def _round_robin_header() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 def generate_image(prompt: str, size: str = "1920x1080",
                    reference_image_urls: list = None, ref_strength: float = 1.0,
-                   timeout: int = 180, thread_id: str = "") -> str:
+                   timeout: int = 90, thread_id: str = "") -> str:
     """调用即梦生图（OpenAI 兼容 /v1/images/generations）。
 
     返回本地落盘的图片路径（与项目其他后端一致，下游 keyframe 审查可直接读图）。
@@ -157,19 +268,35 @@ def generate_image(prompt: str, size: str = "1920x1080",
     base = _base_url()
     url = f"{base}/images/generations"
 
+    # 【修复-H】prompt 长度必须收敛到即梦上限内，否则必返回 -2001 InvalidNode。
+    # 这是此前"整轮关键帧全部失败"的根因（导演 prompt 数千字）。
+    prompt = _fit_prompt(prompt)
+
     # 参考图统一为 base64（即梦接口更稳）；多张全部注入 images 做融合
     image_inputs = [_as_inline(u) for u in (reference_image_urls or []) if u]
 
     # 【修复-A】jimeng 免费接口对 resolution/ratio 取值较敏感；先归一为合法枚举，
     # 避免非法字符串触发 -2001 invalid parameter（关键帧 img2img 失败的根因之一）。
-    _resolution = str(os.getenv("JIMENG_IMAGE_RESOLUTION", "2k")).strip().lower()
+    #
+    # 【修复-G：默认值 2k → 1k】实测（2026-08-30）：
+    #   16:9 + 2k  → 请求卡死/超时，且命中 -2001 InvalidNode
+    #   16:9 + 1k  → 稳定 200 OK
+    #   1:1  + 2k  → OK（低比例侥幸通过）
+    # 而项目生关键帧用的是视频比例（16:9），默认 2k 恰好踩中最差组合，
+    # 导致此前"关键帧生图全面 InvalidNode"。故默认改为 1k。
+    # 1k 分辨率对关键帧完全够用（下游视频仅 720p/1080p），且更省免费额度。
+    _resolution = str(os.getenv("JIMENG_IMAGE_RESOLUTION", "1k")).strip().lower()
     if _resolution not in ("1k", "2k", "4k"):
-        _resolution = "2k"
+        _resolution = "1k"
     _ratio = _size_to_ratio(size)
-    # 【修复-D】img2img（图生图）模式下 2k/4k 分辨率会被代理判定 invalid parameter 并超时，
-    # 实测 1k 稳定返回。纯文生图可保留 2k；仅当带参考图（img2img）时强制降到 1k。
+    # 【修复-D + 修复-G】2k/4k 分辨率在即梦免费代理上不稳定：
+    #   - img2img 模式：会被代理判 invalid parameter 并超时；
+    #   - 纯文生图 + 视频比例(16:9)：实测同样卡死/超时并命中 -2001 InvalidNode。
+    # 此前只对 img2img 强制降 1k，纯文生图保留 2k，导致"img2img 失败 → 降级纯文生图
+    # → 依然 InvalidNode"的连环失败（日志里"纯文生图保底也失败"即由此而来）。
+    # 现统一强制 1k：所有生图路径（含纯文生图）均使用 1k，杜绝 2k/4k 引发的失败。
     _is_img2img = bool(reference_image_urls)
-    if _is_img2img and _resolution != "1k":
+    if _resolution != "1k":
         _resolution = "1k"
 
     # 【修复-B】使用最新且稳定的模型 jimeng-5.0（本地 jimeng-api 代理支持，且对 img2img +
@@ -189,8 +316,8 @@ def generate_image(prompt: str, size: str = "1920x1080",
         # 图生图：images 数组（1-10 张），sample_strength 控制参考强度（近似角色一致）。
         # 【修复-E】sample_strength 不能等于 1.0（等于 1.0 传 images 会被代理判 invalid
         # parameter 并超时）；也不能过低（jimeng 实测 sample_strength < 0.1 会被代理判
-        # invalid parameter -2001，尾帧 ref_strength 低至 0.02/0.03 时必触发）。clamp 到
-        # [0.1, 0.95]：下限 0.1 仍为"低参考→大视觉差异"保留足够自由度，且合法。
+        # invalid parameter -2001）。clamp 到 [0.1, 0.95] 保证取值合法。
+        # 注：调用侧已按实测上调强度（首帧 0.85、尾帧 0.35~0.6），均落在本区间内不被改写。
         _ss = max(0.1, min(0.95, ref_strength))
         payload["images"] = image_inputs
         payload["sample_strength"] = _ss
@@ -209,7 +336,7 @@ def generate_image(prompt: str, size: str = "1920x1080",
     def _post():
         return session.post(url, headers=headers, json=payload, timeout=timeout)
 
-    resp = _retry_request(_post, max_retries=4, backoff=[8, 20, 40, 60],
+    resp = _retry_request(_post, max_retries=4, backoff=[5, 10, 20, 30],
                           label="即梦生图(img2img)" if image_inputs else "即梦生图",
                           _check_body=True)
     if resp.status_code != 200 and image_inputs:
@@ -226,7 +353,7 @@ def generate_image(prompt: str, size: str = "1920x1080",
         }
         try:
             resp = _retry_request(lambda: session.post(url, headers=headers, json=_txt_payload, timeout=timeout),
-                                  max_retries=1, label="即梦纯文生图保底", _check_body=True)
+                                  max_retries=1, backoff=[10], label="即梦纯文生图保底", _check_body=True)
         except Exception as _e:
             raise RuntimeError(f"即梦生图失败 (img2img 与纯文生图均失败): {_err} | 纯文生图: {_e}")
 
@@ -250,10 +377,30 @@ def generate_image(prompt: str, size: str = "1920x1080",
         with open(out_path, "wb") as f:
             f.write(base64.b64decode(b64))
     elif img_url:
-        r = session.get(img_url, timeout=timeout)
-        r.raise_for_status()
+        # 直连失败自动回退本地代理（本机部分 CDN 直连会挂死，见 tools/net.py）。
+        # 下载阶段独立重试：CDN 节点偶发挂死时，仅重试「下载同一 URL」而不重新生图，
+        # 避免上层把「下载失败」误判为「生图失败」而重新生图、白烧即梦积分。
+        from . import net as _net
+        _dl_attempts = max(1, int(_os.getenv("MULTIMEDIA_IMG_DL_RETRIES", "3")))
+        _img_bytes = None
+        _last_dl_err = None
+        for _try in range(_dl_attempts):
+            try:
+                _img_bytes = _net.fetch_bytes(img_url, timeout=timeout, label="即梦图下载")
+                break
+            except Exception as _de:  # noqa: BLE001
+                _last_dl_err = _de
+                if _try < _dl_attempts - 1:
+                    _wait = 3 * (_try + 1)
+                    print(f"    [WARN] 即梦图下载失败({_try+1}/{_dl_attempts})，"
+                          f"{_wait}s 后仅重试下载（不重新生图）: {_de}")
+                    time.sleep(_wait)
+        if _img_bytes is None:
+            raise RuntimeError(
+                f"即梦图下载失败（已重试 {_dl_attempts} 次，图已生成但未能取回；不重新生图）: {_last_dl_err}"
+            )
         with open(out_path, "wb") as f:
-            f.write(r.content)
+            f.write(_img_bytes)
     else:
         raise RuntimeError(f"即梦生图无返回: {str(data)[:200]}")
 
@@ -284,7 +431,8 @@ def generate_video(prompt: str, first_frame_url: str = None,
 
     payload = {
         "model": "jimeng-video-3.5-pro",  # 即梦免费层视频模型
-        "prompt": prompt,
+        # 与生图同源的长度上限保护，避免超长 prompt 触发 -2001 InvalidNode
+        "prompt": _fit_prompt(prompt),
         "ratio": "16:9",
         "resolution": "720p",
         "duration": duration,
@@ -366,10 +514,10 @@ def _save_video(item: dict, session: requests.Session, timeout: int,
         with open(out_path, "wb") as f:
             f.write(base64.b64decode(b64))
     elif url:
-        r = session.get(url, timeout=timeout)
-        r.raise_for_status()
+        from . import net as _net
+        _vid_bytes = _net.fetch_bytes(url, timeout=timeout, label="即梦视频下载")
         with open(out_path, "wb") as f:
-            f.write(r.content)
+            f.write(_vid_bytes)
     else:
         raise RuntimeError(f"即梦视频无返回内容: {str(item)[:200]}")
     # 返回本地绝对路径：graph 会将其本地化并写入 state，前端经 static_server 兜底加载。

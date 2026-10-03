@@ -118,6 +118,19 @@ def _resolve_image(url_or_path: str) -> str:
                 return ""
         print(f"    [WARN][Agnes] 首帧本地文件不存在，跳过: {url_or_path}")
         return ""
+    # 兜底：相对于当前工作目录/项目根的可解析文件路径（如 "workspace/x.png"）。
+    # 此前仅识别绝对路径，相对路径会被静默跳过导致参考图丢失。
+    for _cand in (str(url_or_path), str(PROJECT_ROOT / str(url_or_path))):
+        if os.path.isfile(_cand):
+            try:
+                import mimetypes
+                mime = mimetypes.guess_type(_cand)[0] or "image/png"
+                with open(_cand, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("ascii")
+                return f"data:{mime};base64,{b64}"
+            except Exception as _e:
+                print(f"    [WARN][Agnes] 参考图读取失败，跳过: {_cand} ({_e})")
+                return ""
     # 其他无法识别的形式（非 data/http/回环/media/本地文件）直接跳过
     print(f"    [WARN][Agnes] 参考图无法解析为可发送形式，跳过: {url_or_path}")
     return ""
@@ -147,26 +160,31 @@ def _sanitize_agnes_prompt(prompt: str) -> str:
         return prompt
     _s = prompt
     _repl = [
-        # 暴力 / 攻击 / 战斗 → 中性动态
-        ("violently", "gracefully"),
-        ("battling the gale", "moving through the wind"),
-        ("explosive", "sweeping"),
-        ("attacking", "advancing"),
-        ("striking", "gliding"),
-        ("strikes", "glides"),
-        ("shattering", "gently cracking"),
-        ("battle", "flowing movement"),
-        ("combat", "movement"),
-        ("sword slash", "flowing energy"),
-        ("slash", "sweep"),
-        ("thrusting", "guiding"),
-        ("thrust", "guide"),
+        # 血腥 / 残暴 → 中性（这些是真正触发审核的，必须替换）
         ("dismember", "part"),
         ("blood", "crimson light"),
         ("bleeding", "glowing"),
         ("gore", "glow"),
         ("corpse", "still figure"),
         ("death", "stillness"),
+        # 攻击 / 斩击 → 保留动作张力的电影化武术描述。
+        # 注意：此前把 slash/strike 一律柔化成 "flowing energy"/"gliding"，
+        # 仙侠剑招被抹平成"飘动"，既失去动作张力，也让模型不清楚该画什么动作，
+        # 反而加剧"武器悬空无握持"。改为保留武打语义的中性表述。
+        ("sword slash", "swift blade arc"),
+        ("slash", "blade arc"),
+        ("slashing", "swift blade movement"),
+        ("striking", "striking a martial arts pose"),
+        ("strikes", "moves"),
+        ("shattering", "bursting into shards of light"),
+        ("battle", "martial arts movement"),
+        ("combat", "martial arts movement"),
+        ("violently", "powerfully"),
+        ("battling the gale", "moving through the wind"),
+        ("explosive", "surging"),
+        ("attacking", "advancing"),
+        ("thrusting", "advancing"),
+        ("thrust", "advance"),
         # 黑暗 / 坠落 / 深渊 → 朦胧 / 优雅
         ("dark abyss", "misty valley"),
         ("abyss", "misty distance"),
@@ -188,14 +206,63 @@ def _sanitize_agnes_prompt(prompt: str) -> str:
         # 无高危词命中时，仍追加温和声明以降低审核误判概率
         _sl = _sl.rstrip()
     _sl = _sl.rstrip()
+    # 关键：不得写 "no weapons"。仙侠题材里武器是角色身份的核心组成部分，
+    # 一旦负面声明把 weapon 纳入，模型倾向"武器消失 / 悬空 / 与手脱离"，
+    # 正是成片中"剑悬空无握持"的成因。只禁血腥与伤害，武器与动作保留。
     _safe = (
-        "\n\n[Style] A peaceful, elegant cinematic sequence. "
-        "No violence, no weapons, no blood, no gore, no harm to any character. "
+        "\n\n[Style] An elegant wuxia cinematic sequence. "
+        "No blood, no gore, no harm to any character. "
+        # 质量引导（不作死定义）：让武器以清晰可辨的实体形态呈现、与手部有自然握持关系，
+        # 光效烘托武器而非吞没它；人物与场景的遮挡关系合理自然，避免穿模。
+        "Let weapons read as clear, tangible objects held in a natural grip, with light "
+        "effects enhancing rather than swallowing them. Keep figures and scenery in "
+        "plausible spatial relation so nothing clips through the environment. "
         "Graceful, serene and beautiful."
     )
     if _safe.strip() not in _sl:
         _sl = _sl + _safe
     return _sl
+
+
+def _derive_seed(thread_id: str, prompt: str) -> int:
+    """由 (thread_id, prompt) 派生稳定随机种子。
+
+    同一分镜重试时 seed 一致 → 结果可复现，避免"同一镜每次重试画风都不同"。
+    """
+    import hashlib
+    h = hashlib.sha256(f"{thread_id}|{prompt}".encode("utf-8")).hexdigest()
+    return int(h[:8], 16) % (2 ** 31 - 1)
+
+
+def _normalize_output(path: str, target_w: int, target_h: int) -> str:
+    """把 Agnes 产出统一裁切/缩放到标准分辨率。
+
+    Agnes 服务端会把尺寸对齐到其 latent 网格，实测 16:9 会输出 1920x1088
+    （非标准 1080）。直接拼接/压制时多余的 8px 会造成黑边与比例异常，
+    这里等比缩放后居中裁切到目标尺寸，保证成片规格一致。
+    失败时静默跳过（不阻断主流程）。
+    """
+    try:
+        from moviepy import VideoFileClip
+        clip = VideoFileClip(path)
+        try:
+            if (clip.w, clip.h) == (target_w, target_h):
+                return path
+            scale = max(target_w / clip.w, target_h / clip.h)
+            c2 = clip.resized(scale) if hasattr(clip, "resized") else clip.resize(scale)
+            crop = (getattr(c2, "cropped", None) or getattr(c2, "crop"))
+            c2 = crop(x_center=c2.w / 2, y_center=c2.h / 2, width=target_w, height=target_h)
+            tmp = str(path).replace(".mp4", "_norm.mp4")
+            c2.write_videofile(tmp, codec="libx264", audio=False, logger=None)
+            c2.close()
+            import os as _os
+            _os.replace(tmp, path)
+            print(f"    [Agnes] 输出尺寸标准化: -> {target_w}x{target_h}")
+        finally:
+            clip.close()
+    except Exception as _e:
+        print(f"    [WARN][Agnes] 输出尺寸标准化跳过: {_e}")
+    return path
 
 
 def generate_video(
@@ -209,12 +276,17 @@ def generate_video(
     frame_rate: int = 24,
     thread_id: str = "",
     timeout: int = 180,
+    negative_prompt: str = "",
+    seed: int = None,
 ) -> str:
     """调用 Agnes 免费视频生成。
 
     reference_images: 素材参考图列表（角色转面图 / 道具 / 环境参考图 URL 或本地路径）。
-    first_frame_url / last_frame_url: 首尾帧关键帧（已带角色一致性）。
-    所有图像统一走 keyframes 多图模式注入，使素材参考图完整融入视频生成。
+        默认**不注入** keyframes 图像数组，仅由上游以文本锚点（reference_note）融入 prompt。
+        原因见下方「关键帧与参考图分离」说明。
+        （可用 AGNES_REFERENCE_IN_KEYFRAMES=1 恢复旧行为做对照实验。）
+    first_frame_url / last_frame_url: 首尾帧关键帧（已带角色一致性），
+        这两张才是 keyframes 模式的插值端点。
 
     返回本地 mp4 绝对路径。
     """
@@ -237,27 +309,42 @@ def generate_video(
             return False  # 内联数据无法判定文件名，交由上游过滤负责
         return any(h in s for h in _TURNAROUND_HINTS)
 
-    # 收集所有要注入的图像（首尾帧优先，其次素材参考图），去重
+    # ── 关键帧与参考图分离（Agnes 官方最佳实践）───────────────────────────
+    # Agnes keyframes 模式的语义是「在第 1 张与第 2 张图像之间插值过渡」。
+    # 此前把角色/道具参考图一并塞进 image 数组，Agnes 会把参考图也当作插值端点，
+    # 强制在「首帧构图 → 参考图姿态 → 尾帧构图」之间过渡，直接导致两类质量事故：
+    #   1) 动作瞬移跳跃（中间被参考图的另一个姿态打断）；
+    #   2) 角色身份漂移（多个姿态/外貌在镜头内来回切换）。
+    # 修复：keyframes 只保留「首帧 + 尾帧」；参考图改由上游以文本锚点注入 prompt。
+    # 首尾帧本身已由生图模型用参考图生成，身份信息已在其中，无需重复注入。
+    _INJECT_REF = os.getenv("AGNES_REFERENCE_IN_KEYFRAMES", "0").strip().lower() in ("1", "true", "yes")
+
     img_pool = []
-    for u in [first_frame_url, last_frame_url] + list(reference_images):
-        if u and u not in _fl_set and _is_turnaround(u):
+    for u in (first_frame_url, last_frame_url):
+        if not u:
+            continue
+        if _is_turnaround(u):
             # 整张多视图网格图：排除（二级防御，不注入视频生成）
             continue
         resolved = _resolve_image(u)
         if resolved and resolved not in img_pool:
             img_pool.append(resolved)
 
-    # Agnes keyframes 模式硬性限制 2~3 张图（首尾帧 + 素材参考图共享此额度）。
-    # 超过则精选：首尾帧优先保留，素材参考图按"角色/道具图优先于环境图"截断到上限，
-    # 绝不超限（否则 API 报 invalid_request）。素材图在此仅作角色/场景一致性锚点，
-    # 不当作首尾帧——首尾帧应是镜头专属构图（由生图模型产出），本环境即梦额度耗尽时留空。
+    # 对照实验开关：确需把参考图也当关键帧时开启（默认关闭）
     _AGNES_MAX_IMAGES = 3
-    if len(img_pool) > _AGNES_MAX_IMAGES:
-        print(f"    [Agnes] 注入图 {len(img_pool)} 张超过上限 {_AGNES_MAX_IMAGES}，"
-              f"精选首尾帧优先 + 素材参考图截断")
-        _fl = [x for x in img_pool if x in (_resolve_image(first_frame_url), _resolve_image(last_frame_url)) and x]
-        _ref = [x for x in img_pool if x not in _fl]
-        img_pool = (_fl + _ref)[:_AGNES_MAX_IMAGES]
+    if _INJECT_REF and len(img_pool) < _AGNES_MAX_IMAGES:
+        for u in reference_images:
+            if len(img_pool) >= _AGNES_MAX_IMAGES:
+                break
+            if not u or _is_turnaround(u):
+                continue
+            resolved = _resolve_image(u)
+            if resolved and resolved not in img_pool:
+                img_pool.append(resolved)
+        print(f"    [Agnes] 对照模式：参考图并入 keyframes，共 {len(img_pool)} 张")
+    elif reference_images:
+        print(f"    [Agnes] 素材参考图 {len(reference_images)} 张仅作文本锚点注入 prompt"
+              f"（不再并入 keyframes，避免动作跳跃与身份漂移）")
 
     # 尾帧缺失保底（免费档 jimeng 偶发失败常见）：
     #  1) 优先用首帧即时 img2img 补生成「真尾帧」（低 ref_strength 制造姿态/构图差异），
@@ -298,20 +385,31 @@ def generate_video(
     num_frames = max(9, min(num_frames, 441))
 
     body = {
-        "model": _AGNES_MODEL,
+        "model": (os.getenv("AGNES_VIDEO_MODEL") or _AGNES_MODEL).strip(),
         "prompt": prompt,
         "width": w,
         "height": h,
         "num_frames": num_frames,
         "frame_rate": frame_rate,
     }
+    # 【修复】Agnes 原生支持 negative_prompt 独立字段。
+    # 此前上游把负面词拼进 prompt —— 模型会把 "deformed anatomy" 等词当作正向
+    # 描述的一部分来解读，反而强化问题。独立传入才能被正确当作负向约束。
+    if negative_prompt:
+        body["negative_prompt"] = negative_prompt
+    # 稳定 seed：同一分镜重试结果可复现，便于对比迭代
+    if seed is None:
+        seed = _derive_seed(thread_id, prompt)
+    body["seed"] = int(seed)
     if use_keyframes:
         body["extra_body"] = {
             "mode": "keyframes",
             "image": img_pool,
         }
-        print(f"    [Agnes] keyframes 多图模式，注入 {len(img_pool)} 张参考图"
-              f"（首尾帧 + 素材参考图，上限 {_AGNES_MAX_IMAGES}）")
+        # 修复日志：明确区分——默认只注入首尾帧（参考图已改为文本锚点，不进 keyframes）
+        _ref_injected = _INJECT_REF and len(img_pool) > 2
+        print(f"    [Agnes] keyframes 模式，注入 {len(img_pool)} 张图"
+              f"（首尾帧{ ' + 素材参考图' if _ref_injected else ''}，上限 {_AGNES_MAX_IMAGES}）")
     elif _mode == "i2v":
         # agnes 原生单图图生视频：image=[首帧]，首帧锁起始帧
         body["extra_body"] = {"image": img_pool}
@@ -387,25 +485,33 @@ def generate_video(
         except requests.exceptions.RequestException as e:
             print(f"    [WARN][Agnes] 轮询网络错误，重试: {e}")
             continue
-        status = pr.get("status") or (pr.get("data", {}) or {}).get("status")
+        status = (
+            pr.get("status")
+            or pr.get("internal_status")
+            or (pr.get("data", {}) or {}).get("status")
+        )
         if status == "completed":
-            # 视频地址真实位置（实测确认）：
+            # 视频地址真实位置（实测确认，按优先级）：
+            #   - 顶层 url（Agnes v2 新结构，已完成任务直接挂在 pr["url"]）
             #   - 新结构：pr["metadata"]["url"]
             #   - 旧结构：pr["remixed_from_video_id"] / pr["data"]["remixed_from_video_id"]
-            # 兼容两者，优先 metadata.url。
+            # 兼容多结构，优先顶层 url。
             _meta = pr.get("metadata") or {}
             vid_url = (
-                _meta.get("url")
+                pr.get("url")
+                or _meta.get("url")
                 or pr.get("remixed_from_video_id")
                 or (pr.get("data", {}) or {}).get("remixed_from_video_id")
                 or _meta.get("video_url")
             )
             if not vid_url:
                 raise AgnesQuotaError(f"Agnes 完成但无视频 URL: {str(pr)[:200]}")
-            vr = session.get(vid_url, timeout=timeout)
-            vr.raise_for_status()
+            from . import net as _net
+            _vid_bytes = _net.fetch_bytes(vid_url, timeout=timeout, label="Agnes 视频下载")
             with open(out_path, "wb") as f:
-                f.write(vr.content)
+                f.write(_vid_bytes)
+            # 统一到标准分辨率（Agnes 实测会输出 1920x1088 这类非标准尺寸）
+            out_path = _normalize_output(str(out_path), w, h)
             print(f"    [OK][Agnes] 视频完成: {out_path}")
             return str(out_path)
         if status == "failed":

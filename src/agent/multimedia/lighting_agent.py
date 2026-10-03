@@ -40,7 +40,7 @@ _MOOD_LIGHTING: Dict[str, Dict[str, str]] = {
         "atmosphere": "dense volumetric with light shafts and particulate",
     },
     "triumph": {
-        "mood_layer": "golden backwash with lens flare and atmospheric bloom",
+        "mood_layer": "golden backwash with soft glow and controlled highlight roll-off",
         "color_temp": "warm (3500K) with golden highlight",
         "atmosphere": "celebratory particle effects with diffused warmth",
     },
@@ -98,7 +98,11 @@ _CONTRAST_PROGRESSION: Dict[str, List[str]] = {
 _ATMOSPHERE_LAYERS: Dict[str, List[str]] = {
     "base":    ["clear air", "light haze", "moderate fog", "heavy fog"],
     "mid":     ["dust particles", "rain streaks", "smoke wisps", "heat shimmer"],
-    "overlay": ["lens flare", "light bloom", "chromatic aberration", "film grain"],
+    # overlay 层：原先含 lens flare / light bloom，是成片过曝（高光溢出、人物发白）的
+    # 主因，尤其 climax 阶段必叠加。改为受控光效令牌——保留光感但明确「不溢出」，
+    # 由模型以柔和辉光/光晕呈现，而非把画面冲成白屏。
+    "overlay": ["soft glow", "gentle light wrap", "controlled highlight roll-off",
+                "chromatic aberration", "film grain"],
 }
 
 # Pacing phase → atmosphere intensity

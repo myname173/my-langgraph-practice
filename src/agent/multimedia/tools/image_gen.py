@@ -1,6 +1,8 @@
 # src/agent/multimedia/tools/image_gen.py
+import time
 import os
 import base64
+import requests
 from dotenv import load_dotenv
 from .video_gen import _retry_request, _SUBMIT_TIMEOUT, _POLL_TIMEOUT
 from ..config_loader import get_visual_backend, get_jimeng_config
@@ -144,6 +146,9 @@ def _is_quota_or_model_error(error_text: str) -> bool:
         # 余额/计费相关（之前遗漏导致 fallback 链中断）
         "balance", "insufficient", "arrearage", "overdue",
         "余额", "欠费", "余额不足",
+        # 积分/权益相关（jimeng 免费额度耗尽返回「积分不足或没有相关权益」-2001，
+        # 措辞与「余额」不同，此前遗漏导致 fallback 链在真实额度耗尽时从未触发）
+        "积分", "credit", "没有相关权益", "相关权益", "-2001", "2001",
         # 限流
         "throttling", "ratelimit", "rate limit",
         # 模型不可用
@@ -210,9 +215,179 @@ def _is_rate_limit(text: str) -> bool:
                                    "ratequota", "too many requests"))
 
 
+# ── 多生图后端自助接入（P0-4 收敛后的再开放）──
+# jimeng 仍是首选（免费积分 + 多参考图融合）。当它因积分/额度类错误失败时，
+# 按 MULTIMEDIA_IMAGE_FALLBACK（默认 "dashscope,siliconflow"）顺序尝试
+# **已配置 key** 的备选后端——现场连通验证，失败继续下一个，全部失败抛原错误。
+# 用户无需预先在设置面板点测试：key 填了、能用就用（"连通的话就给他们用"）。
+# 设置面板的「连通测试」按钮（/settings/probe）可预先手动验证 key 有效性。
+_IMAGE_FALLBACK_ORDER = [
+    b.strip().lower()
+    for b in os.getenv("MULTIMEDIA_IMAGE_FALLBACK", "dashscope,siliconflow").split(",")
+    if b.strip()
+]
+
+_DASHSCOPE_API_BASE = "https://dashscope.aliyuncs.com/api/v1"
+
+
+def _generate_via_dashscope(
+    prompt: str, size: str, ref_urls: list, negative_prompt: str, thread_id: str, timeout: int = 120
+) -> str:
+    """DashScope qwen-image 系列生图（同步 multimodal messages 端点）。
+
+    复用历史遗留的 _IMG2IMG_CHAIN / _build_payload / _extract_image_url：
+    - 有参考图走 _IMG2IMG_CHAIN（多参考图融合，messages content: image+text）；
+    - 无参考图走 _TEXT2IMAGE_CHAIN。
+    key 无效/额度不足/模型不可用 → 抛异常，由 fallback 链继续下一个。
+    """
+    key = (os.getenv("DASHSCOPE_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("DASHSCOPE_API_KEY 未配置")
+    base = (os.getenv("DASHSCOPE_BASE_URL") or _DASHSCOPE_API_BASE).strip().rstrip("/")
+    chain = _IMG2IMG_CHAIN if ref_urls else _TEXT2IMAGE_CHAIN
+    norm_size = _normalize_size(size)
+    last_err = ""
+    for model, endpoint in chain:
+        payload = _build_payload(model, endpoint, prompt, norm_size,
+                                 reference_image_urls=ref_urls,
+                                 ref_strength=1.0, negative_prompt=negative_prompt)
+        try:
+            resp = requests.post(
+                f"{base}/services/aigc/{endpoint}",
+                json=payload,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                timeout=timeout,
+            )
+            text = resp.text[:400]
+            if resp.status_code != 200:
+                last_err = f"{model}: HTTP {resp.status_code} {text}"
+                print(f"    [IMG][DashScope] {last_err}")
+                continue
+            url = _extract_image_url(resp.json())
+            if not url:
+                last_err = f"{model}: 响应中未找到图片 URL: {text}"
+                print(f"    [IMG][DashScope] {last_err}")
+                continue
+            print(f"    [IMG][DashScope] {model} 生成成功")
+            return url
+        except Exception as e:  # noqa: BLE001
+            last_err = f"{model}: {str(e)[:160]}"
+            print(f"    [IMG][DashScope] {last_err}")
+    raise RuntimeError(f"DashScope 生图失败: {last_err}")
+
+
+def _generate_via_siliconflow(
+    prompt: str, size: str, ref_urls: list, negative_prompt: str, thread_id: str, timeout: int = 120
+) -> str:
+    """SiliconFlow Qwen-Image 生图（images/generations，参考图走 image 数组）。"""
+    key = (os.getenv("SILICONFLOW_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("SILICONFLOW_API_KEY 未配置")
+    base = (os.getenv("SILICONFLOW_BASE_URL") or "https://api.siliconflow.cn").strip().rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    model = (os.getenv("SILICONFLOW_IMAGE_MODEL") or "Qwen/Qwen-Image").strip()
+    # 尺寸映射：SiliconFlow 接受 1024x1024 等 WxH；jimeng 的 2K 语义近似 2048 长边
+    sz = {"2K": "2048x2048", "1K": "1024x1024"}.get(size.upper(), size if "x" in size else "1024x1024")
+    body: dict = {
+        "model": model,
+        "prompt": prompt,
+        "image_size": sz,
+    }
+    if ref_urls:
+        body["image"] = ref_urls[:3]  # Qwen-Image 图生图参考（data URL 或公网 URL）
+    if negative_prompt and negative_prompt.strip():
+        body["negative_prompt"] = negative_prompt.strip()
+
+    resp = requests.post(
+        f"{base}/v1/images/generations",
+        json=body,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        timeout=timeout,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code} {resp.text[:300]}")
+    data = resp.json()
+    # 兼容两种响应：{"images":[{"url":...}]} / OpenAI 风格 {"data":[{"url":...}]}
+    items = data.get("images") or data.get("data") or []
+    for it in items:
+        u = (it or {}).get("url") or ""
+        if u:
+            print(f"    [IMG][SiliconFlow] {model} 生成成功")
+            return u
+    raise RuntimeError(f"响应中未找到图片 URL: {str(data)[:200]}")
+
+
+def _probe_dashscope_image(api_key: str, model: str, post_fn=None, timeout: float = 15.0):
+    """零额度探测 DashScope qwen-image 生图可达性（与视频 probe 同手法）。
+
+    向同步生图端点发送「缺参」请求（input 为空），服务端校验阶段即拒绝，
+    不创建任务、不消耗额度：401=Key 无效 / Model.NotFound=模型无效 /
+    InvalidParameter=Key 与模型路由均有效 → 通过。
+    Returns: (ok: bool, detail: str)
+    """
+    if post_fn is None:
+        post_fn = requests.post
+    url = f"{_DASHSCOPE_API_BASE}/services/aigc/multimodal-generation/generation"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    payload = {"model": model, "input": {}}
+    try:
+        resp = post_fn(url, headers=headers, json=payload, timeout=timeout)
+    except Exception as e:
+        return False, f"网络错误（无法连接百炼）: {e}"
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+    code = str(data.get("code") or "")
+    msg = str(data.get("message") or resp.text[:160])
+    low = (code + " " + msg).lower().replace(" ", "")
+    if resp.status_code == 401 or "invalidapikey" in low:
+        return False, "Key 无效（401 InvalidApiKey）"
+    if "model.notfound" in low or "modelnotexist" in low or "模型不存在" in msg:
+        return False, f"模型名无效: {model}"
+    if "invalidparameter" in low or resp.status_code == 400:
+        return True, f"Key 与模型路由有效（{model}）"
+    if resp.status_code == 200:
+        return True, f"可达（{model}）"
+    if "throttling" in low or "quota" in low:
+        return True, f"Key/模型有效，但额度或限流受限: {msg[:120]}"
+    return False, f"未知响应: HTTP {resp.status_code} {msg[:120]}"
+
+
+def _probe_siliconflow_image(api_key: str, model: str, timeout: float = 15.0):
+    """零额度探测 SiliconFlow：GET /v1/models 验证 Key 有效性。
+
+    models 列表不校验具体生图模型权限（诚实标注）；不发起生图请求，不消耗额度。
+    Returns: (ok: bool, detail: str)
+    """
+    base = (os.getenv("SILICONFLOW_BASE_URL") or "https://api.siliconflow.cn").strip().rstrip("/")
+    if base.endswith("/v1"):
+        base = base[: -len("/v1")]
+    try:
+        resp = requests.get(
+            f"{base}/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=timeout,
+        )
+    except Exception as e:
+        return False, f"网络错误（无法连接硅基流动）: {e}"
+    if resp.status_code == 401:
+        return False, "Key 无效（401）"
+    if resp.status_code != 200:
+        return False, f"HTTP {resp.status_code}: {resp.text[:140]}"
+    try:
+        ids = [m.get("id", "") for m in (resp.json().get("data") or [])]
+    except Exception:
+        ids = []
+    if model and any(model in i for i in ids):
+        return True, f"Key 有效，模型 {model} 在可用列表中"
+    return True, "Key 有效（未在模型列表中检索到目标模型名，路由以实际生成为准）"
+
+
 def generate_keyframe(prompt: str, size: str = "2K", reference_image_urls: list = None,
                       ref_strength: float = 1.0, negative_prompt: str = "",
-                      thread_id: str = "") -> str:
+                      thread_id: str = "", timeout: int = 90) -> str:
     """调用即梦(jimeng)图片生成模型生成关键帧（支持多参考图融合）。
 
     设计约束：关键帧生成只用 jimeng，不再走 DashScope / SiliconFlow / 任何 fallback。
@@ -238,10 +413,53 @@ def generate_keyframe(prompt: str, size: str = "2K", reference_image_urls: list 
     jimeng_prompt = prompt
     if negative_prompt and negative_prompt.strip():
         jimeng_prompt = f"{prompt}\nAvoid: {negative_prompt.strip()}"
-    return jimeng.generate_image(
-        jimeng_prompt, size=size, reference_image_urls=inline_refs,
-        ref_strength=ref_strength, thread_id=thread_id,
-    )
+    # S1（P0-4）：生图调用同样接入熔断器 + 成本台账。jimeng 为唯一生图后端，
+    # 熔断主要用于 /settings/health 状态可视化与连续失败可见性。
+    from . import backend_health as _bh
+
+    _t0 = time.time()
+    try:
+        out = jimeng.generate_image(
+            jimeng_prompt, size=size, reference_image_urls=inline_refs,
+            ref_strength=ref_strength, thread_id=thread_id, timeout=timeout,
+        )
+        _bh.record_result("jimeng", True, time.time() - _t0, kind="image", thread_id=thread_id)
+        return out
+    except Exception as e:  # noqa: BLE001
+        _bh.record_result("jimeng", False, time.time() - _t0, kind="image",
+                          thread_id=thread_id, meta=str(e))
+        # ── 自助多后端 fallback ──
+        # 仅对积分/额度/限流类错误启用（配置类错误直接抛出，避免掩盖真问题）。
+        # 备选后端必须已在 .env / 设置面板配置 key——现场连通验证，失败继续下一个；
+        # 全部失败时抛出 jimeng 原错误，保持旧行为。
+        _err = str(e)
+        if not _is_quota_or_model_error(_err):
+            raise
+        _chain = [b for b in _IMAGE_FALLBACK_ORDER if b in ("dashscope", "siliconflow")]
+        if not _chain:
+            raise
+        print(f"    [IMG] jimeng 额度/积分类失败，尝试备选生图后端: {_chain}")
+        for backend in _chain:
+            _t1 = time.time()
+            try:
+                if backend == "dashscope" and (os.getenv("DASHSCOPE_API_KEY") or "").strip():
+                    print("    [IMG] fallback → DashScope qwen-image")
+                    out = _generate_via_dashscope(prompt, size, inline_refs, negative_prompt, thread_id, timeout=timeout)
+                    _bh.record_result("dashscope", True, time.time() - _t1, kind="image", thread_id=thread_id)
+                    return out
+                if backend == "siliconflow" and (os.getenv("SILICONFLOW_API_KEY") or "").strip():
+                    print("    [IMG] fallback → SiliconFlow Qwen-Image")
+                    out = _generate_via_siliconflow(prompt, size, inline_refs, negative_prompt, thread_id, timeout=timeout)
+                    _bh.record_result("siliconflow", True, time.time() - _t1, kind="image", thread_id=thread_id)
+                    return out
+                if backend not in ("dashscope", "siliconflow"):
+                    print(f"    [WARN] 未知备选生图后端 '{backend}'，跳过")
+            except Exception as e2:  # noqa: BLE001
+                print(f"    [WARN] 备选后端 {backend} 失败: {str(e2)[:140]}")
+                if backend in ("dashscope", "siliconflow"):
+                    _bh.record_result(backend, False, time.time() - _t1, kind="image",
+                                      thread_id=thread_id, meta=str(e2))
+        raise
 
 
 

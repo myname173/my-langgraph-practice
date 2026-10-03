@@ -30,6 +30,7 @@ import json
 import time
 import uuid
 from pathlib import Path
+from typing import Optional
 
 import requests
 from fastapi import APIRouter, FastAPI, File, HTTPException, Request, UploadFile
@@ -300,6 +301,8 @@ async def register_asset(payload: RegisterAssetPayload) -> dict:
 class RerunFromPayload(BaseModel):
     thread_id: str
     scene_index: int
+    # F-4：重跑锁定镜头时顺带把它移出 locked_scenes（否则链式扇出会跳过它）
+    unlock: bool = False
 
 
 @assets_router.post("/rerun_from")
@@ -323,6 +326,9 @@ def rerun_from(payload: RerunFromPayload) -> dict:
         "video_is_perfect", "embedding_similarity", "portrait_similarity",
         "continuity_score", "flicker_score", "audio_track", "subtitle_path",
         "bgm_path", "final_movie_with_audio",
+        # F-1/F-4：本轮新增的可再生字段（候选/一致性/外科手术痕迹）随重跑一并清理
+        "image_candidates", "needs_realign", "vlm_consistency",
+        "fix_type", "extend_applied", "render_params",
     )
     try:
         cfg = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
@@ -344,6 +350,11 @@ def rerun_from(payload: RerunFromPayload) -> dict:
                 continue
             for f in PRODUCT_FIELDS:
                 sc.pop(f, None)
+        # F-4：解锁目标镜头及其后（保持 locked_scenes 与待重跑范围一致）
+        if payload.unlock:
+            locked = existing_cv.get("locked_scenes")
+            if isinstance(locked, list):
+                existing_cv["locked_scenes"] = [i for i in locked if isinstance(i, int) and i < idx]
         existing_cv["scenes"] = scenes
         existing_cv["current_scene_index"] = idx
         # 重置成片/音频产物（因为后续镜头会被重跑、旧成片不可用）
@@ -383,7 +394,348 @@ def rerun_from(payload: RerunFromPayload) -> dict:
         raise HTTPException(status_code=500, detail=f"rerun_from failed: {e}") from e
 
 
+class AbortPayload(BaseModel):
+    thread_id: str
+    reason: Optional[str] = None
+
+
+@assets_router.post("/abort")
+def abort_thread(payload: AbortPayload) -> dict:
+    """中止会话（真正的服务端中止）。
+
+    背景：此前前端 stop() 只调用 AbortController.abort()，仅断开 SSE 流，
+    后端 run 仍在跑；用户随后再次启动会对同一 thread 并发跑两条 run，
+    互相覆盖 state，导致产物错乱/进度回跳。
+
+    本端点把 aborted=True 与续跑入口 next=["abort"] 一起写入 checkpoint：
+      - 历史列表/详情立即呈现 aborted 状态；
+      - 若之后对该 thread 发起 continue（input=null），LangGraph 会直接
+        走 abort_node 终止，而不是与残留 run 并行跑两条。
+
+    说明：无法强杀"已在运行中的进程内 run"（LangGraph 无抢占式取消），
+    但通过把终态写进 checkpoint，保证不会被意外续跑出两条并发 run。
+    """
+    thread_id = payload.thread_id
+    reason = payload.reason or "用户手动停止"
+    try:
+        cfg = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        saver = build_checkpointer()
+        tup = saver.get_tuple(cfg)
+        if tup is None or not tup.checkpoint:
+            raise HTTPException(status_code=404, detail=f"thread not found: {thread_id}")
+
+        existing_cv = dict(tup.checkpoint.get("channel_values") or {})
+        existing_cv["aborted"] = True
+        existing_cv["abort_reason"] = reason
+        existing_cv["error_log"] = reason
+        checkpoint = {
+            "v": 2,
+            "id": uuid.uuid4().hex,
+            "ts": uuid.uuid1().hex,
+            "parent_id": tup.checkpoint.get("id"),
+            "channel_values": existing_cv,
+            "channel_versions": {k: "0" for k in existing_cv},
+            "versions_seen": {k: {} for k in existing_cv},
+            "pending_sends": [],
+            "next": ["abort"],  # 续跑时直接进 abort_node，杜绝并行双跑
+        }
+        metadata = dict(tup.metadata or {})
+        metadata["step"] = 0
+        metadata["source"] = "abort"
+        saver.put(cfg, checkpoint, metadata, {})
+        return {"ok": True, "thread_id": thread_id, "aborted": True, "reason": reason}
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 - 回传细节便于排障
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"abort failed: {e}") from e
+
+
 app.include_router(assets_router)
+
+
+# ── P2-4 镜头配方卡接口（/recipe/*）───────────────────────────────
+# 把一个 run 的“镜头配方”（首帧/尾帧/视频的 prompt、ref_strength、时长、参考图、后处理等）
+# 开放给前端：查看、复制、另存、以及「微调并重跑」。纯读/纯本地，不消耗生图额度。
+from .tools import recipe as _recipe  # noqa: E402
+
+
+class RecipeApplyPayload(BaseModel):
+    thread_id: str
+    scene_index: int
+    # 微调补丁，例：{"image": {"prompt": "...", "ref_strength": 0.5}, "video": {"prompt": "..."}}
+    patch: dict = {}
+
+
+recipe_router = APIRouter(prefix="/recipe", tags=["recipe"])
+
+
+def _load_checkpoint_cv(thread_id: str):
+    """读取某 thread 最新 checkpoint 的 channel_values（不存盘）。"""
+    cfg = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+    saver = build_checkpointer()
+    tup = saver.get_tuple(cfg)
+    if tup is None or not tup.checkpoint:
+        raise HTTPException(status_code=404, detail=f"thread not found: {thread_id}")
+    return tup, dict(tup.checkpoint.get("channel_values") or {})
+
+
+@recipe_router.get("/{thread_id}")
+def get_recipe(thread_id: str) -> dict:
+    """返回该 thread 的完整镜头配方（即时从 checkpoint 构建）+ 可读 Markdown。"""
+    _tup, cv = _load_checkpoint_cv(thread_id)
+    cv.setdefault("thread_id", thread_id)
+    r = _recipe.build_task_recipe(cv)
+    return {"ok": True, "thread_id": thread_id, "recipe": r, "markdown": _recipe.recipe_to_markdown(r)}
+
+
+@recipe_router.post("/{thread_id}/save")
+def save_recipe(thread_id: str) -> dict:
+    """把当前配方落盘到 output/recipes/<thread>/（可分享的 JSON 文件）。"""
+    _tup, cv = _load_checkpoint_cv(thread_id)
+    cv.setdefault("thread_id", thread_id)
+    r = _recipe.build_task_recipe(cv)
+    paths = _recipe.save_task_recipe(r)
+    return {"ok": True, "thread_id": thread_id, **paths}
+
+
+@recipe_router.post("/{thread_id}/apply")
+def apply_recipe(thread_id: str, payload: RecipeApplyPayload) -> dict:
+    """微调：把配方补丁写回指定镜头并标记从该镜重跑。
+
+    做法与 /assets/rerun_from 一致（整 checkpoint 重写 + next=["advance_scene"]），
+    但：仅清空“生成产物”字段，**保留 render_params**（它正是被微调的配方），
+    并把补丁里的 prompt/时长/ref_strength 写回 scene 字段，使重跑直接采用新参数。
+    """
+    thread_id = payload.thread_id
+    idx = int(payload.scene_index)
+    PRODUCT_FIELDS = (
+        "image_url", "last_image_url", "raw_video_url", "final_video_url",
+        "critique", "video_critique", "auto_feedback", "editor_note",
+        "editor_pass", "reviewer_note", "is_perfect", "last_image_is_perfect",
+        "video_is_perfect", "embedding_similarity", "portrait_similarity",
+        "continuity_score", "flicker_score",
+        "video_duration", "segment_start",
+        "image_candidates", "needs_realign", "vlm_consistency",
+        "extend_applied",
+    )
+    try:
+        tup, cv = _load_checkpoint_cv(thread_id)
+        cv.setdefault("thread_id", thread_id)
+        scenes = cv.get("scenes") or []
+        if not isinstance(scenes, list) or idx < 0 or idx >= len(scenes):
+            raise HTTPException(status_code=400, detail=f"invalid scene_index={idx}, total={len(scenes)}")
+        # 1) 基于当前状态构建配方并应用补丁
+        base = _recipe.build_task_recipe(cv)
+        patched = _recipe.apply_shot_patch(base, idx, payload.patch or {})
+        # 2) 补丁 → scene 字段
+        fields = _recipe.shot_patch_to_scene_fields(payload.patch or {})
+        sc = scenes[idx]
+        if not isinstance(sc, dict):
+            raise HTTPException(status_code=400, detail=f"scene {idx} 非 dict")
+        for i in range(idx, len(scenes)):
+            s = scenes[i]
+            if not isinstance(s, dict):
+                continue
+            for f in PRODUCT_FIELDS:
+                s.pop(f, None)
+        # 写入微调后的字段（保留 render_params 并合并补丁）
+        merged_rp = dict(sc.get("render_params") or {})
+        incoming_rp = fields.pop("render_params", {}) or {}
+        for sect, val in incoming_rp.items():
+            if isinstance(val, dict):
+                merged_rp[sect] = {**(merged_rp.get(sect) or {}), **val}
+            else:
+                merged_rp[sect] = val
+        sc.update(fields)
+        sc["render_params"] = merged_rp
+        cv["scenes"] = scenes
+        cv["current_scene_index"] = idx
+        cv["final_movie_path"] = None
+        cv["final_movie_with_audio"] = None
+        cv["error_log"] = None
+        cv["aborted"] = False
+        cv["abort_reason"] = None
+        checkpoint = {
+            "v": 2,
+            "id": uuid.uuid4().hex,
+            "ts": uuid.uuid1().hex,
+            "parent_id": tup.checkpoint.get("id"),
+            "channel_values": cv,
+            "channel_versions": {k: "0" for k in cv},
+            "versions_seen": {k: {} for k in cv},
+            "pending_sends": [],
+            "next": ["advance_scene"],
+        }
+        metadata = dict(tup.metadata or {})
+        metadata["step"] = 0
+        metadata["source"] = "recipe_apply"
+        saver = build_checkpointer()
+        cfg = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
+        saver.put(cfg, checkpoint, metadata, {})
+        # 3) 同步落盘微调后的配方，便于追溯
+        try:
+            _recipe.save_task_recipe(patched)
+        except Exception as _e:  # noqa: BLE001
+            print(f"[WARN] recipe apply 落盘失败(不阻断): {_e}")
+        return {
+            "ok": True,
+            "thread_id": thread_id,
+            "scene_index": idx,
+            "applied_fields": sorted(fields.keys()),
+            "recipe": patched,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        import traceback
+
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"recipe apply failed: {e}") from e
+
+
+app.include_router(recipe_router)
+
+# ── 用户设置接口（S1）：前端「设置」面板读写 API Key / 模型 / 后端 / 档位 ────────
+#
+# 跨进程生效：设置持久化到 data/user_settings.json（已在 .gitignore 的 data/ 下）；
+# 任何进程的 config_loader 在导入与保存时都会 apply_user_settings() 把文件合并进
+# 自己的 os.environ，因此 LangGraph server / Streamlit / 本服务无需重启即可生效。
+
+from .tools import backend_health as _backend_health
+from .config_loader import (
+    apply_user_settings as _apply_user_settings,
+    load_user_settings as _load_user_settings,
+    mask_secret as _mask_secret,
+    save_user_settings as _save_user_settings,
+)
+from .tools.video_gen import _probe_dashscope_video as _probe_dashscope_video
+from .tools.image_gen import _probe_dashscope_image as _probe_dashscope_image
+from .tools.image_gen import _probe_siliconflow_image as _probe_siliconflow_image
+
+# 允许经设置面板写入的键白名单（防止任意环境变量注入）
+SETTINGS_ALLOWED_KEYS = {
+    # 凭证
+    "DASHSCOPE_API_KEY", "AGNES_API_KEY", "ZHIPU_API_KEY", "JIMENG_SESSION_ID",
+    "GEMINI_API_KEY", "SILICONFLOW_API_KEY",
+    "OPENAI_API_KEY",          # 文本 LLM（OpenAI 兼容模式，默认即 DashScope）
+    # 后端选择 / 档位
+    "VIDEO_PROVIDER", "MULTIMODIA_BACKEND", "QUALITY_TIER",
+    # 模型覆盖（视频 / 生图）
+    "AGNES_VIDEO_MODEL", "ZHIPU_VIDEO_MODEL", "DASHSCOPE_VIDEO_MODEL",
+    "GEMINI_VIDEO_MODEL", "GEMINI_IMAGE_MODEL", "SILICONFLOW_IMAGE_MODEL",
+    "DASHSCOPE_IMAGE_MODEL",
+    # 模型覆盖（文本 LLM / 接口地址）
+    "DASHSCOPE_TEXT_MODEL", "SILICONFLOW_TEXT_MODEL", "OPENAI_BASE_URL",
+    # 语音（默认音色覆盖；字幕为规则生成，无需模型）
+    "TTS_VOICE",
+    # 生成参数
+    "VIDEO_DURATION", "JIMENG_IMAGE_RESOLUTION", "AGNES_MIN_SUBMIT_GAP",
+}
+
+_SETTINGS_SECRET_KEYS = {
+    "DASHSCOPE_API_KEY", "AGNES_API_KEY", "ZHIPU_API_KEY", "JIMENG_SESSION_ID",
+    "GEMINI_API_KEY", "SILICONFLOW_API_KEY", "OPENAI_API_KEY",
+}
+
+settings_router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+class SettingsPayload(BaseModel):
+    values: dict
+
+
+@settings_router.get("")
+async def get_settings() -> dict:
+    """当前设置（敏感键打码，标注来源 file/env）+ 各后端熔断健康快照。"""
+    file_vals = _load_user_settings()
+    merged: dict = {}
+    for k in sorted(SETTINGS_ALLOWED_KEYS):
+        current = os.environ.get(k, "")
+        from_file = file_vals.get(k, "")
+        shown = from_file if from_file else current
+        merged[k] = _mask_secret(str(shown)) if k in _SETTINGS_SECRET_KEYS else str(shown)
+        merged[k + "__source"] = "file" if from_file else ("env" if current else "")
+    return {"settings": merged, "backend_health": _backend_health.snapshot()}
+
+
+@settings_router.post("")
+async def post_settings(req: SettingsPayload) -> dict:
+    values = {
+        k: str(v).strip()
+        for k, v in (req.values or {}).items()
+        if k in SETTINGS_ALLOWED_KEYS
+    }
+    if not values:
+        raise HTTPException(status_code=400, detail="没有可写入的设置键（白名单外的键被拒绝）")
+    _save_user_settings(values)
+    return {
+        "ok": True,
+        "applied_keys": sorted(values.keys()),
+        "backend_health": _backend_health.snapshot(),
+        "note": "设置已写入 data/user_settings.json 并在本进程生效；其他进程"
+                "（LangGraph server / Streamlit）在下一次生成调用时自动加载。",
+    }
+
+
+class ProbePayload(BaseModel):
+    kind: str                  # "dashscope-video"（后续可扩展 openai-models 等）
+    model: str = ""
+    api_key: str = ""          # 可选；留空则用当前已保存/环境中的 Key
+
+
+@settings_router.post("/probe")
+async def settings_probe(req: ProbePayload) -> dict:
+    """零额度探测：验证「模型名 + API Key」是否可用（不创建任务、不消耗额度）。
+
+    探测失败时返回 ok=false + 具体原因（Key 无效 / 模型名无效 / 额度受限 / 网络错误），
+    由设置面板直接展示给用户。
+    """
+    _apply_user_settings()
+    model = (req.model or "").strip()
+    if req.kind == "dashscope-image":
+        # P2 后续：生图后端自助接入 —— 用户填 Key/模型后先连通测试，通了才参与 fallback
+        api_key = (req.api_key or "").strip() or \
+            (os.getenv("DASHSCOPE_API_KEY") or "").strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="未提供 DASHSCOPE_API_KEY")
+        if not model:
+            model = "qwen-image-3.0"
+        ok, detail = _probe_dashscope_image(api_key, model)
+        return {"ok": ok, "kind": req.kind, "model": model, "detail": detail}
+    if req.kind == "siliconflow-image":
+        api_key = (req.api_key or "").strip() or \
+            (os.getenv("SILICONFLOW_API_KEY") or "").strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="未提供 SILICONFLOW_API_KEY")
+        ok, detail = _probe_siliconflow_image(api_key, model)
+        return {"ok": ok, "kind": req.kind, "model": model, "detail": detail}
+    if req.kind == "dashscope-video":
+        if not model:
+            raise HTTPException(status_code=400, detail="未提供模型名")
+        api_key = (req.api_key or "").strip() or \
+            (os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+        if not api_key:
+            raise HTTPException(status_code=400, detail="未提供 DASHSCOPE_API_KEY（请在上方密钥区填写）")
+        ok, detail = _probe_dashscope_video(api_key, model)
+        return {"ok": ok, "kind": req.kind, "model": model, "detail": detail}
+    raise HTTPException(status_code=400, detail=f"暂不支持探测类型: {req.kind}")
+
+
+@settings_router.get("/health")
+async def settings_health() -> dict:
+    return {"backend_health": _backend_health.snapshot()}
+
+
+@settings_router.get("/cost/{thread_id}")
+async def settings_cost(thread_id: str) -> dict:
+    return _backend_health.summarize_ledger(thread_id)
+
+
+app.include_router(settings_router)
+
 
 
 @app.get("/health")

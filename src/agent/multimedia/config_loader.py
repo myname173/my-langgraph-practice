@@ -30,6 +30,10 @@ _THRESHOLDS_FILE = _CONFIG_DIR / "thresholds.json"
 _VISUAL_RULES_FILE = _CONFIG_DIR / "multimedia_rules.json"
 
 
+# S1：项目 data 目录（用户设置文件 / 成本台账落盘根）
+_PROJECT_ROOT_DATA = Path(__file__).resolve().parents[3] / "data"
+
+
 def _load_json(path: Path, label: str) -> Dict[str, Any]:
     """从 JSON 配置文件加载字典。文件缺失时抛出明确错误。"""
     if not path.exists():
@@ -297,3 +301,120 @@ def get_siliconflow_config() -> Dict[str, Any]:
         "base_url": os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1").strip().rstrip("/"),
         "image_model": os.getenv("SILICONFLOW_IMAGE_MODEL", "Kwai-Kolors/Kolors").strip(),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S1（架构评审 P0-1 + 用户需求）：质量档位计划 + 用户设置文件（跨进程 API Key/模型）
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 质量档位 → 视频后端优先级。显式 VIDEO_PROVIDER 仍置顶覆盖
+# （见 tools/video_gen.py::_resolve_video_candidates）。
+_QUALITY_TIER_PLANS: Dict[str, Dict[str, Any]] = {
+    "fast": {
+        "providers": ["zhipu", "jimeng", "agnes"],
+        "note": "草稿/预览档：优先秒级免费模型（zhipu-flash），时长钳制 ≤5s，省额度",
+    },
+    "standard": {
+        "providers": ["agnes", "jimeng", "zhipu"],
+        "note": "默认档：保持既有 agnes 优先行为，多参考图身份锚点注入",
+    },
+    "cinema": {
+        "providers": ["agnes", "jimeng", "dashscope"],
+        "note": "高质感档：agnes 多参考注入优先；dashscope 需在设置中显式指定模型",
+    },
+}
+
+
+def get_tier_plan(tier: str) -> Dict[str, Any]:
+    """返回质量档位的后端优先级计划（未知档位回退 standard）。"""
+    tier = (tier or "standard").strip().lower()
+    return _QUALITY_TIER_PLANS.get(tier, _QUALITY_TIER_PLANS["standard"])
+
+
+def quality_tiers() -> list:
+    """全部可用档位名。"""
+    return list(_QUALITY_TIER_PLANS.keys())
+
+
+# ── 用户设置文件：前端「设置」面板写入 data/user_settings.json ────────────────
+# 跨进程生效机制：static_server(8900) / LangGraph server(2024) / Streamlit 是三个
+# 独立进程，无法互相写 os.environ。约定：设置文件是共享通道——config_loader 在
+# 模块导入与每次 save 时调用 apply_user_settings()，把文件中的非空键合并进当前
+# 进程的 os.environ（文件优先于 .env），所有既有 os.getenv 调用点零改动生效。
+USER_SETTINGS_PATH = _PROJECT_ROOT_DATA / "user_settings.json"
+
+_settings_cache: Dict[str, Any] = {"mtime": None, "data": {}}
+_settings_applied: set = set()  # 已从文件注入 os.environ 的键（用于空值撤销）
+
+
+def load_user_settings() -> Dict[str, str]:
+    """读取用户设置文件（mtime 缓存）。返回 str->str 映射；文件缺失返回空。"""
+    p = USER_SETTINGS_PATH
+    try:
+        if not p.exists():
+            return {}
+        mt = p.stat().st_mtime
+        if _settings_cache["mtime"] != mt:
+            with open(p, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            _settings_cache["data"] = {str(k): "" if v is None else str(v) for k, v in (raw or {}).items()}
+            _settings_cache["mtime"] = mt
+        return dict(_settings_cache["data"])
+    except Exception as e:  # noqa: BLE001
+        print(f"[WARN] 用户设置文件读取失败（忽略，回退 .env）: {e}")
+        return {}
+
+
+def apply_user_settings() -> int:
+    """把用户设置文件合并进当前进程 os.environ。返回本次实际生效的非空键数。"""
+    data = load_user_settings()
+    applied = 0
+    for k, v in data.items():
+        if not k:
+            continue
+        if v.strip():
+            os.environ[k] = v.strip()
+            _settings_applied.add(k)
+            applied += 1
+        elif k in _settings_applied:
+            # 文件中清空的键：仅撤销我们注入过的那份，恢复 .env 默认
+            os.environ.pop(k, None)
+            _settings_applied.discard(k)
+    return applied
+
+
+def save_user_settings(updates: Dict[str, Any]) -> Dict[str, str]:
+    """合并写入用户设置文件并立即在当前进程生效（供 settings API 调用）。"""
+    p = USER_SETTINGS_PATH
+    p.parent.mkdir(parents=True, exist_ok=True)
+    current: Dict[str, Any] = {}
+    if p.exists():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                current = json.load(f) or {}
+        except Exception:  # noqa: BLE001
+            current = {}
+    for k, v in (updates or {}).items():
+        if not k:
+            continue
+        current[str(k)] = "" if v is None else str(v)
+    tmp = p.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(current, f, ensure_ascii=False, indent=2)
+    tmp.replace(p)
+    _settings_cache["mtime"] = None  # 失缓存强制重读
+    apply_user_settings()
+    return {k: v for k, v in current.items()}
+
+
+def mask_secret(value: str) -> str:
+    """敏感值打码：保留前 4 后 4。"""
+    if not value:
+        return ""
+    if len(value) <= 8:
+        return "****"
+    return value[:4] + "****" + value[-4:]
+
+
+# 模块导入时立即应用一次（文件中的设置优先于 .env 同名键——UI 设置优先）
+apply_user_settings()

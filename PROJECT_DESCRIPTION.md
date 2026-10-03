@@ -98,56 +98,93 @@
 
 ---
 
-### 22 个节点详解
+### 30 个节点详解
+
+#### 编排层模块化（P2-3）
+
+原 `graph.py` 是 5,779 行单体（节点 + 路由 + compile 全挤在一个文件里，已超出「能靠记忆维护」的规模）。P2-3 按 **stage** 把它机械拆成 `nodes/` 包，**逻辑逐字节保留**（132 个顶层定义经 AST 级核验：零重复、零缺失、零源码差异）：
+
+| 模块 | 行数 | 职责 |
+|---|---:|---|
+| `nodes/common.py` | ~1,470 | 跨 stage 常量、纯工具、风格 / prompt 工具箱（`_decide` / `safe_parse_json` / `_resolve_style` / `_finalize_single_frame_prompt` …） |
+| `nodes/scripting.py` | ~660 | 脚本与规划：`visual_context_builder` / `shot_strategy_builder` / `sequence_orchestrator` / `showrunner` |
+| `nodes/design.py` | ~440 | 视觉设计：`reference_gen` + 资产匹配（角色 / 场景锚点基线） |
+| `nodes/director.py` | ~1,000 | 导演：`cinematic_critic` / `director_refine` / `film_studio` / `director` / 提示词预览 / `end_frame_director` / `videographer` |
+| `nodes/render.py` | ~1,760 | 渲染：`image_gen` / `reviewer` / `image_review` / `end_frame_gen` / `end_frame_review` / `video_gen` / `video_reviewer` / `video_review` |
+| `nodes/assemble.py` | ~1,000 | 成片：`advance_scene` / `abort` / `stitcher` / `draft_review` / `audio_mixer` |
+| `nodes/routing.py` | ~330 | 路由决策：全部 `decide_*` 条件边函数 |
+| `nodes/parallel.py` | ~620 | 并行 / 链式扇出：Send fan-out、镜头子图、FLF 链式衔接 |
+| `nodes/wiring.py` | ~250 | 图组装与编译：节点注册、边连接、`compile`、thread 状态查询 |
+| `graph.py` | ~90 | **兼容层**：仅把上述实现再导出，历史调用方零改动 |
+
+依赖是单向无环的：`common → design → render → parallel → wiring`，`common → {scripting, director, assemble, routing} → parallel → wiring`。`graph.py` 保留为向后兼容再导出层，`langgraph.json` 的 `src.agent.graph:graph` 入口与 `tests/` / `streamlit_app.py` / `scripts/` 全部无需改动。
 
 #### 节点注册表
 
-| # | 节点名 | 实现函数 | 所属阶段 |
-|---|---|---|---|
-| 1 | `showrunner` | `showrunner_node` | 剧本策划 |
-| 2 | `showrunner_review` | `showrunner_review_gate_node` | 剧本审核 (HITL) |
-| 3 | `visual_context_builder` | `visual_context_builder_node` | Phase 1 视觉规则 |
-| 4 | `shot_strategy_builder` | `shot_strategy_builder_node` | Phase 2 镜头设计 |
-| 5 | `sequence_orchestrator` | `sequence_orchestrator_node` | Phase 3 序列编排 |
-| 6 | `film_studio` | `film_studio_node` | Phase 5 专家协作 |
-| 7 | `cinematic_critic` | `cinematic_critic_node` | Phase 4 质量评估 |
-| 8 | `director` | `director_node` | 导演创作 (LLM) |
-| 9 | `director_refine` | `director_refine_node` | Prompt 精炼 |
-| 10 | `image_generator` | `image_gen_node` | 图像生成 |
-| 11 | `reviewer` | `reviewer_node` | 图像审核 (LLM) |
-| 12 | `image_review` | `image_review_gate_node` | 图像审核门控 (HITL) |
-| 13 | `end_frame_director` | `end_frame_director_node` | 尾帧设计 (LLM) |
-| 14 | `end_frame_generator` | `end_frame_gen_node` | 尾帧生成 |
-| 15 | `end_frame_review` | `end_frame_review_gate_node` | 尾帧审核 (HITL) |
-| 16 | `videographer` | `videographer_node` | 运镜设计 (LLM) |
-| 17 | `video_generator` | `video_gen_node` | 视频生成 |
-| 18 | `video_reviewer` | `video_reviewer_node` | 视频审核 (LLM) |
-| 19 | `video_review` | `video_review_gate_node` | 视频审核门控 (HITL) |
-| 20 | `advance_scene` | `advance_scene_node` | 场景推进 |
-| 21 | `abort` | `abort_node` | 异常终止 |
-| 22 | `stitcher` | `stitcher_node` | 最终拼接 |
+| # | 节点名 | 实现函数 | 所属模块 | 所属阶段 |
+|---|---|---|---|---|
+| 1 | `showrunner` | `showrunner_node` | scripting | 剧本策划 |
+| 2 | `showrunner_review` | `showrunner_review_gate_node` | scripting | 剧本审核 (HITL) |
+| 3 | `reference_gen` | `reference_gen_node` | design | 参考图生成 |
+| 4 | `visual_context_builder` | `visual_context_builder_node` | scripting | Phase 1 视觉规则 |
+| 5 | `shot_strategy_builder` | `shot_strategy_builder_node` | scripting | Phase 2 镜头设计 |
+| 6 | `sequence_orchestrator` | `sequence_orchestrator_node` | scripting | Phase 3 序列编排 |
+| 7 | `film_studio` | `film_studio_node` | director | Phase 5 专家协作 |
+| 8 | `cinematic_critic` | `cinematic_critic_node` | director | Phase 4 质量评估 |
+| 9 | `shot_chain` | `_run_shot_chain_node` | parallel | P0-2 逐镜并行分支 |
+| 10 | `shot_chain_seq` | `_run_chain_node` | parallel | P1-1 FLF 链式分支 |
+| 11 | `shots_collected` | `shots_collected_node` | parallel | 并行归并 |
+| 12 | `director` | `director_node` | director | 导演创作 (LLM) |
+| 13 | `director_refine` | `director_refine_node` | director | Prompt 精炼 |
+| 14 | `prompt_preview` | `prompt_preview_node` | director | 提示词预览 (HITL) |
+| 15 | `image_generator` | `image_gen_node` | render | 图像生成 |
+| 16 | `reviewer` | `reviewer_node` | render | 图像审核 (LLM) |
+| 17 | `image_review` | `image_review_gate_node` | render | 图像审核门控 (HITL) |
+| 18 | `end_frame_director` | `end_frame_director_node` | director | 尾帧设计 (LLM) |
+| 19 | `end_frame_prompt_preview` | `end_frame_prompt_preview_node` | director | 尾帧提示词预览 (HITL) |
+| 20 | `end_frame_generator` | `end_frame_gen_node` | render | 尾帧生成 |
+| 21 | `end_frame_review` | `end_frame_review_gate_node` | render | 尾帧审核 (HITL) |
+| 22 | `videographer` | `videographer_node` | director | 运镜设计 (LLM) |
+| 23 | `video_generator` | `video_gen_node` | render | 视频生成 |
+| 24 | `video_reviewer` | `video_reviewer_node` | render | 视频审核 (LLM) |
+| 25 | `video_review` | `video_review_gate_node` | render | 视频审核门控 (HITL) |
+| 26 | `advance_scene` | `advance_scene_node` | assemble | 场景推进 |
+| 27 | `abort` | `abort_node` | assemble | 异常终止 |
+| 28 | `stitcher` | `stitcher_node` | assemble | 最终拼接 |
+| 29 | `draft_review` | `draft_review_gate_node` | assemble | 成片草稿审片 (HITL) |
+| 30 | `audio_mixer` | `audio_mixer_node` | assemble | 配音 / 字幕 / 混音 |
 
-#### 条件路由（6 个分支点）
+#### 条件路由（11 个分支函数）
 
 | 路由函数 | 触发节点 | 路径 A | 路径 B |
 |---|---|---|---|
-| `decide_after_critic` | cinematic_critic | `director` (PASS) | `shot_strategy_builder` (rewrite) |
-| `decide_image_quality` | image_review | `end_frame_director` / `videographer` (PASS) | `director` (重生成) |
-| `decide_end_frame_quality` | end_frame_review | `videographer` (PASS) | `end_frame_director` (重生成) |
-| `decide_after_video_generation` | video_generator | `video_reviewer` (正常) | `abort` (异常) |
-| `decide_video_quality` | video_review | `advance_scene` (PASS) | `videographer` (重生成) |
-| `decide_next_scene` | advance_scene | `visual_context_builder` (下一 scene) | `stitcher` (全部完成) |
+| `_fan_out_shots` | cinematic_critic | Send 扇出（并行 / 链式） | `director` / `shot_strategy_builder` |
+| `decide_after_critic` | cinematic_critic（串行回退） | `director` (PASS) | `shot_strategy_builder` (rewrite) |
+| `decide_after_prompt_preview` | prompt_preview | `image_generator` | `director` |
+| `decide_after_image_generation` | image_generator | `reviewer` | `retry` / `skip` / `abort` |
+| `decide_image_quality` | image_review | `end_frame_director` / `videographer` | `director` (重生成) |
+| `decide_after_end_frame_prompt_preview` | end_frame_prompt_preview | `end_frame_generator` | `end_frame_director` |
+| `decide_after_end_frame_generation` | end_frame_generator | `end_frame_review` | `retry` / `skip` / `abort` |
+| `decide_end_frame_quality` | end_frame_review | `videographer` | `end_frame_director` (重生成) |
+| `decide_after_video_generation` | video_generator | `video_reviewer` | `retry` / `skip` / `abort` |
+| `decide_video_quality` | video_review | `advance_scene` | `videographer` / `video_generator` / `director` |
+| `decide_next_scene` | advance_scene | `visual_context_builder` | `stitcher` |
+| `_decide_after_parallel_join` | shots_collected | `stitcher` | `abort` |
+| `decide_after_draft` | draft_review | `audio_mixer` | `stitcher`（重剪） |
 
-#### Human-in-the-Loop 中断点（4 个）
+#### Human-in-the-Loop 中断点（6 个）
 
-管线在以下节点会暂停执行，等待用户通过 Streamlit UI 审核并决策（approve / rewrite / edit）：
+管线在以下节点会暂停执行，等待用户审核并决策（approve / rewrite / edit）：
 
 | 中断节点 | stage 标识 | 审核内容 |
 |---|---|---|
-| `showrunner_review` | `showrunner_review` | 全局设定 + 4 个 scene 剧本 |
-| `image_review` | `image_review` | 关键帧图片 + 前帧对比 + embedding 相似度 |
+| `showrunner_review` | `showrunner_review` | 全局设定 + scene 剧本 |
+| `prompt_preview` | `prompt_preview` | 关键帧 prompt |
+| `image_review` | `image_review` | 关键帧图片 + 前帧对比 + 一致性 |
+| `end_frame_prompt_preview` | `end_frame_prompt_preview` | 尾帧 prompt |
 | `end_frame_review` | `end_frame_review` | 尾帧图片 + 首帧对比 |
 | `video_review` | `video_review` | 视频片段 + 运镜 prompt |
+| `draft_review` | `draft_review` | 无声粗剪成片 |
 
 ---
 
@@ -240,7 +277,7 @@
 5. 将精炼后的 transitions 注入 sequence_graph
 6. 将当前 scene 风格快照写入 `cinematic_memory`，供后续 scene 参考
 
-跨 scene 一致性由 `cinematic_memory.py` 维护——一个模块级单例 memory bank，存储每个 scene 的摄影/灯光/剪辑风格摘要，提供 `get_previous_scene_style()` 和 `generate_film_brain_report()` 接口。
+跨 scene 一致性由 `cinematic_memory.py` 维护——**按 thread 作用域的记忆库**，存储每个 scene 的摄影/灯光/剪辑风格摘要，提供 `get_previous_scene_style()` 和 `generate_film_brain_report()` 接口。记忆库**写入即原子落盘**到 `data/memory/<thread_id>.json`（进程内 dict 仅作缓存层）；长任务中断恢复后，新进程首次访问会自动从落盘重建，避免风格记忆清空导致跨镜头一致性静默退化（P0-3 记忆持久化）。`reset_memory(thread_id)` 在新 run 开始时清空该线程的缓存与落盘文件。
 
 #### Phase RAG — 语义知识检索
 
@@ -298,6 +335,484 @@ python -m src.agent.multimedia.rag.ingest --source gen
 
 ---
 
+### P0/P1 架构增强（并行加速 + FLF 链式衔接）
+
+| 项 | 机制 | 环境变量 |
+|---|---|---|
+| P0-2 镜头并行 | `cinematic_critic` 通过后按镜头 `Send` 扇出 `shot_chain` 子图；槽位经 `scene_results` / `branch_results` 无锁归并 | `MULTIMEDIA_PARALLEL_SHOTS=0` 关闭 |
+| P1-1 FLF 链式衔接 × 并行共存 | 镜头按【连续片段】切链：**链内逐镜串行**（前镜尾帧 → `scene_anchors.last_frame_url` → 后镜 img2img 承接 + 视频首尾帧），**链间并行**（`Send` 扇出 `shot_chain_seq`） | `MULTIMEDIA_FLF_CHAINS`：`0`=关闭（回退逐镜并行）；正整数=链数；**未设置=连续性优先（单链，全部镜头串行承接）** |
+
+- 串行模式（非 auto_mode / 关闭并行）下，`advance_scene` 写 `scene_anchors.last_frame_url`，实现同样的「上一镜尾帧 → 下一镜首帧」像素级承接。
+- **默认连续性优先**：不设 `MULTIMEDIA_FLF_CHAINS` 时为单链，全部镜头串行承接尾帧、无链缝（画面像素级连续）。
+- **链缝取舍**：设 `N>1` 后，相邻链的首/末镜之间不承接 —— 这是「跨链并行」的固有代价。需最大连续性时设 `MULTIMEDIA_FLF_CHAINS=1`（单链、全承接、无并行）；需最大并行度时设 `0`（逐镜并行、无链内承接）。
+
+---
+
+### P1-3 镜头级外科手术（修正粒度）
+
+审核 FAIL 的重试不再一律「回 director 全量重 roll」，而是由审核决策携带**修正类型** `fix_type`，按粒度选择入口节点：
+
+| fix_type | 语义 | 路由落点 | 相对成本 |
+|---|---|---|---|
+| `prompt_only` | 保关键帧，仅改运镜词后重滚视频 | 直连 `video_generator`（跳过 videographer LLM） | 最低 |
+| `keep_first_frame` | 保首帧，重滚视频（重新设计运镜） | `videographer`（默认行为） | 中 |
+| `reimage` | 重生成关键帧 | `director`（完整图链路 → 尾帧 → 视频） | 最高 |
+| `extend` | 保首帧，尾帧续接「延长时长」 | 直连 `video_generator`（duration ×1.5，封顶 12s） | 中 |
+
+- 入口：`image_review` / `video_review` 两个审核闸口的决策字典可带 `fix_type`（含中文别名「改词/保首帧/重绘/延长」）；闸口把它写入 `scene["fix_type"]`，`decide_image_quality` / `decide_video_quality` 读取并分流。
+- 未提供 `fix_type` 时行为与改动前一致（image 侧默认 `reimage`、video 侧默认 `keep_first_frame`）。
+- 通过 `render_params` 记录每次渲染的后端/时长/prompt 等，供 `prompt_only`/`extend` 冻结「其它条件、仅改一处」。
+- auto_mode 下人审闸口自动放行，不产生 `fix_type`，即并行/自动链路行为不变。
+
+---
+
+### S3 成片观感层（P1-2 / P1-5 / F-2 / F-3 / F-5）
+
+**P1-2 卡点剪辑 + 成片 Critic**
+- **成片 Critic**：`draft_review_gate_node` 对无声粗剪按时间顺序抽 6 帧，交视觉模型
+  （`vision_eval.critic_final_cut`）从「节奏 / 连续性 / 画质」三维度复审，产出结构化
+  问题清单 `draft_critic_report`（severity/type/desc），随草稿审片卡展示给用户，供
+  「通过 / 打回重拼」决策。开关 `MULTIMEDIA_FINAL_CRITIC`（默认开）；失败不阻断；
+  auto_mode 也跑（写 state 供前端展示）。
+- **卡点对齐**：`stitch_videos(beat_grid=...)` 把每段微调到节拍网格（**只剪不补**，
+  每段最多剪 0.6s，需 ≥2 个网格），切点落拍；`segment_durations/starts` 基于修剪后
+  时长计算，字幕/配音对齐自动跟随。开关 env `MULTIMEDIA_BEAT_GRID` 填 BPM 数值
+  （如 `120` → 0.5s 网格），**默认关闭**（剪帧是创作取舍，交给用户决定）。
+
+**P1-5 音频层升级**
+- **BGM 自动闪避**：`mix_audio` 接收逐镜头配音真实区间（`voice_timings`），用 50fps
+  音量包络把配音段压低 duck_factor=0.35（≈ -9dB）、间隙恢复，滑动平均平滑防爆音；
+  失败回退恒定音量旧行为。整段配音兜底路径（无 timings）同样回退。
+- **SFX 转场音效**：`build_sfx_events` 按跨场景转场类型（与 stitcher 完全同源的
+  `select_cross_scene_transition` 重算）在切点前 0.15s 排布音效，类别映射
+  smash_cut→impact / whip_pan→whoosh / dissolve→soft / fade_through_black→deep，
+  曲库 `assets/sfx/<类别>/`（env `SFX_LIBRARY_DIR` 可覆盖），**空库静默跳过**。
+  详见 `assets/sfx/README.md`。
+
+**P2-1 成片包装层**
+- **片头片尾卡**：`tools/video_pack.py` —— `build_title_card` 深色底 + 居中标题/副标题
+  （复用 `fonts.make_text_clip`，moviepy 2.x + 中文字体），带淡入淡出；
+  `attach_title_cards` 把首尾各 ~2.2s 的卡接到成片并返回 `intro` 时长，
+  `stitcher_node` 据此把所有 `scene.segment_start` 统一后移，字幕/配音对齐不漂移。
+  默认开启（RunInput `title_card` / env `MULTIMEDIA_TITLE_CARD=0` 可关）。
+- **色彩预设**：`apply_color_preset` 提供 warm / cool / noir 三档，256 级通道 LUT
+  查表（noir 为灰度+对比映射）；env `MULTIMEDIA_COLOR_PRESET`（默认空=不应用）。
+  轻量逐帧 LUT，不引入 3D LUT 解析与重型依赖。
+- **字幕主题**：`fonts.burn_subtitles(theme=)` 三套——default（白字黑边）/
+  minimal（小号浅灰）/ cinema（大号金白描边），env `MULTIMEDIA_SUBTITLE_THEME`。
+
+**P2-2 后处理板**
+- `tools/video_post.py` —— `enhance_final_cut`，基于项目已有 imageio_ffmpeg 自带
+  ffmpeg 二进制（零新增依赖）：
+  清晰度增强 `MULTIMEDIA_POST_HEIGHT=1080`（lanczos 上采样 + unsharp 锐化，**非模型
+  超分**）；补帧 `MULTIMEDIA_POST_FPS=30`（`MULTIMEDIA_POST_INTERP=dup|mci`，mci 为
+  运动补偿插值，观感最好但极慢）。两者默认关闭；目标低于当前时自动跳过；失败
+  一律返回原成片不阻断。接入点在 stitcher_node：拼接 → 后处理 → 包装卡。
+
+**F-2 成本与额度仪表**：顶栏常驻 `RunCostBar`——运行耗时（1s 刷新）、镜头进度
+（含失败数）、视频生成尝试次数（成功+重试，额度消耗代理）、重写次数、各生成后端
+熔断健康灯（`/settings/health`，60s 轮询）。数据全部 state 派生 + 现有端点，零后端改动。
+
+**F-3 质量档位选择器**：`TaskLauncher` 新增三档卡片（fast 省额度 / standard 均衡 /
+cinema 电影级），选择随 `RunInput.quality_tier` 进 state——后端 P0-1 已全链路消费
+该字段，本次纯前端接入。
+
+**F-5 产物流式生命周期**：活动镜头卡显示当前阶段徽标（分镜设计/图像生成/关键帧
+审核/尾帧/运镜/视频生成/视频审核），由时间轴最新节点推导（`NODE_PHASE` 映射）。
+
+> 涉及：后端 `tools/audio.py`（duck + SFX）、`tools/video_stitcher.py`（beat_grid）、
+> `tools/vision_eval.py`（critic_final_cut）、`state.py`（draft_critic_report）、
+> `graph.py`（三处接线）；前端 `types.ts`、`components/RunCostBar.tsx`（新）、
+> `TaskLauncher.tsx`、`App.tsx`、`SceneGallery.tsx`、`InterruptApprovalCard.tsx`、
+> `styles.css`。S3 剩余 P2-1 包装层 / P2-2 超分补帧未实现（后续 Sprint）。
+
+---
+
+### 多生图后端自助接入（连通即用）
+
+jimeng（每日免费积分）仍是首选生图后端；其余后端按「用户自助配置 → 连通测试 → 通了
+才启用」接入，不要求预先手动修 key：
+
+- **fallback 链**（`tools/image_gen.py`）：jimeng 因**积分/额度/限流类错误**失败时，
+  按 `MULTIMEDIA_IMAGE_FALLBACK`（默认 `"dashscope,siliconflow"`）顺序尝试**已配置
+  key** 的备选后端，现场连通验证、失败继续下一个、全部失败抛原错误（保持旧行为）。
+  非额度类配置错误不触发 fallback，避免掩盖真问题。备选：
+  - `dashscope`：qwen-image 系列同步 multimodal messages（复用遗留
+    `_IMG2IMG_CHAIN` / `_build_payload` / `_extract_image_url`，有参考图走多图融合链）；
+  - `siliconflow`：Qwen-Image `images/generations`（参考图注入 `image` 数组，
+    支持负向词与 image_size 映射）。
+- **零额度连通测试**（设置面板「连通测试」按钮）：`_probe_dashscope_image`（缺参请求
+  手法：401=Key 无效 / 模型不存在=模型无效 / InvalidParameter=通过）与
+  `_probe_siliconflow_image`（GET /v1/models 验证 Key，不消耗额度）。
+  探测 kind：`dashscope-image` / `siliconflow-image`。
+- **设置面板**：`DASHSCOPE_IMAGE_MODEL` / `SILICONFLOW_IMAGE_MODEL` 字段旁均有
+  「连通测试」按钮（`PROBE_BY_FIELD` 泛化），填 Key → 测试 → 显示通过/失败详情。
+- **后端健康**：备选后端调用同样走熔断器 + 成本台账（`/settings/health` 可见）。
+
+### F-1/F-4 审核台与镜头卡（前端）
+
+把 P1-3 的修正粒度、P0-1 的锁定语义、以及批量审核能力接到前端（React + TS）：
+
+**F-4 外科手术入口与镜头卡四态**
+- **修正方式选择器**：`InterruptApprovalCard` 在 `image_review` / `video_review`
+  闸口渲染后端下发的 `fix_types`（仅改词 / 保首帧 / 重绘关键帧 / 延长），点选后随
+  `rewrite` 决策回传 `fix_type`；不选则按后端默认（image=reimage、video=keep_first_frame）。
+- **通过后锁定**：`video_review` 卡新增「通过后锁定」勾选，决策携带 `lock=true`，
+  后端写 `locked_scenes`；重跑/续跑复用该镜头成片。
+- **镜头卡四态**：`SceneGallery` 每张卡推导 `failed / locked / needs_fix / draft`
+  （含 P1-4 `needs_realign` 的「角色漂移」徽标）。failed 卡一键「从此镜重跑」，
+  locked 卡「解锁并重跑」（`rerun_from` 请求携带 `unlock=true`，后端顺带把它移出
+  `locked_scenes`）。
+- **闸口快捷决策**：当审核中断恰好停在某镜时，该镜头卡上直接出现「通过 + 四类修正」
+  按钮，无需滚回审核卡。注意：修正决策只能在闸口中断时刻消费——非中断状态的修正
+  走「重跑此镜头」，到闸口时再选修正方式（这是 LangGraph 决策模型的固有语义）。
+
+**F-1 批量审核与关键帧候选**
+- **批量预通过**：画廊卡片带多选框；选中后「预通过选中 / 通过并锁定」把镜头加入
+  **自动通过队列**（前端 `useAgentStream` 维护）：命中这些镜头的审核闸口时自动
+  `resume(approve)` 放行，其余镜头仍正常停下等待人工审。video_review 通过后该镜
+  出队；可随时取消；新建会话/切换会话时清空。
+- **关键帧候选 A/B 挑选**：`image_gen_node` 每次生成把关键帧登记进
+  `scene.image_candidates`（最多 6 版）；`image_review` payload 携带最近 4 版
+  `candidates`；审核卡渲染候选条，点选某一版后「通过」即回传
+  `pick_candidate=<下标>`，闸口先落位该候选再走 approve 基准登记。配合
+  「重绘关键帧」修正可积累多版候选逐版对比（hero 镜头的 2 候选挑选即此流程）。
+
+> 涉及文件：后端 `graph.py`（候选登记 / payload / pick_candidate）、
+> `static_server.py`（rerun unlock + 新增可再生字段清理）；前端 `types.ts`、
+> `lib/fixTypes.ts`（新）、`components/InterruptApprovalCard.tsx`、
+> `components/SceneGallery.tsx`、`hooks/useAgentStream.ts`、`lib/historyClient.ts`、
+> `App.tsx`、`styles.css`。
+
+---
+
+### P1-4 前置：人脸对齐（mediapipe）
+
+VLM 成对判断本身对「头部倾斜/朝向差异」较敏感。为此在比较前插入一步**几何归一化**：
+
+- **实现**：`tools/face_align.py`，用 mediapipe `FaceLandmarker`（478 关键点）检测人脸，
+  以双眼（优先虹膜中心）连线计算 roll 角，绕人脸中心旋转摆正，再按人脸包围盒外扩
+  `margin=0.6` 裁剪成正方形输出。
+- **模型缓存**：`.task` 模型（3.6MB）首次使用自动下载并缓存到
+  `MULTIMEDIA_FACE_MODEL_DIR`（默认 `~/.cache/multimedia_face`）。
+- **接入点**：`vision_eval._prepare_for_compare()` 在 `assess_character_consistency`
+  比较前对两张图分别对齐；返回结果新增 `aligned` 字段标识本次是否走了对齐。
+- **开关 / 降级**：env `MULTIMEDIA_FACE_ALIGN`（默认 `"1"` 开启）；mediapipe 缺失、
+  未检出人脸或任何异常 → 回退原图，`aligned=False`，绝不阻断主流程（实测海鸥关键帧
+  等无人脸图即走此路径）。
+- **实测**：真人脸对齐后人脸占画面比例 0.102 → 0.355（3.5×）；将输入旋转 25° 后对齐
+  可摆正（再次对齐残差角 0.06°）；单人脸检测+关键点约 27ms。
+
+---
+
+### P1-4 角色一致性强制层（VLM 成对判断）
+
+原一致性闭环（`decide_image_quality` 的「角色一致性低于阈值 → 强制重生」）依赖 DashScope
+`multimodal-embedding-v1` 计算余弦相似度。该通道 Key 失效（401）后相似度恒为 `None`，闭环
+**静默降级为失效**。P1-4 给它补上一条 VLM 兜底数据源：
+
+- **数据源切换**：`reviewer_node` 在 embedding 相似度缺失时，调用
+  `assess_character_consistency(当前帧, 参照帧)`，用视觉模型（`glm-4v-flash`）对两张图做
+  「是否同一角色」判断。参照帧优先取源头角色肖像（抗累积误差），其次上一镜尾帧。
+- **结构化输出**：强制模型只回 JSON `{"same_character": bool, "score": 0-1, "reason": str}`，
+  解析失败即视为不可用。**不注入剧本上下文**——实测弱模型会把文字描述当判据，去比对
+  「画面 vs 描述」而非「图1 vs 图2」，导致同角色被误判为漂移。
+- **漂移判定**：`score < 阈值` **且** `same_character == false` 两个信号同时成立才算漂移，
+  降低误杀（避免空耗生图额度）。阈值默认 0.6，env `MULTIMEDIA_VLM_CONSISTENCY_THRESHOLD`
+  可覆盖，并复用 `get_consistency_threshold` 按镜头朝向/景别自适应放宽。
+- **闭环动作**：判定漂移 → `reviewer_node` 写 `scene["needs_realign"]=True` →
+  `decide_image_quality` 触发重生（回 `director`），受 `iterations < 3` 上限保护；
+  与 embedding 闭环**互斥**（仅当 embedding 缺失时接管，避免双通道重复触发）。
+- **开关 / 降级**：env `MULTIMEDIA_CONSISTENCY_VLM`（默认 `"1"` 开启）；VLM 接口异常或
+  `reviewer_unavailable` 时自动跳过，绝不阻断主流程。
+
+> 说明：真正的「本地人脸对齐」重生成未实现（依赖 insightface 等重型依赖），当前闭环动作止于
+> 「标记 needs_realign → 重生成 → 交由人工审核」。
+
+---
+
+### P2-4 镜头配方卡（Shot Recipe）
+
+**问题**：一个镜头「长什么样、怎么被造出来的」此前散落在 scene 的十几处字段 +
+`render_params` 里，既不可复现（换个 run 无法照着重来），也不可分享（没法交给别人）。
+
+**做法**：新增 `tools/recipe.py`，把「一个 run 的全部镜头」提炼成一份结构化配方：
+
+```json
+{
+  "schema": "multimedia.shot_recipe.v1",
+  "thread_id": "...", "created_at": "2026-10-03T02:30:00+08:00",
+  "task": "...", "global_setting": "...",
+  "style": {"visual_style": "...", "description": "...", "suffix": "..."},
+  "post":  {"color_preset": "...", "subtitle_theme": "default", "title_card": true},
+  "shots": [
+    {"index": 0, "script": "...", "action_beat": "...",
+     "image":     {"backend": "jimeng", "prompt": "...", "size": "2K",
+                    "ref_images": ["..."], "ref_strength": 0.6},
+     "end_frame": {"prompt": "...", "ref_strength": 0.45, "ref_images": ["..."]},
+     "video":     {"backend": "agnes", "quality_tier": "standard", "duration": 5.0,
+                    "prompt": "...", "use_first_last_frame": true, "reference_images": ["..."]},
+     "fix":       {"fix_type": "keep_first_frame", "extend_applied": false},
+     "artifacts": {"image_url": "...", "last_image_url": "...", "final_video_url": "..."}}
+  ]
+}
+```
+
+**三个能力**：
+
+| 能力 | 实现 |
+|---|---|
+| **可复现** | graph 在各生图/生视频节点把参数记入 `render_params`（image / end_frame / video 三段），成片拼好后由 `stitcher_node` 自动落盘到 `output/recipes/<thread>/latest.json`（+ 时间戳快照） |
+| **可分享** | 前端「🧾 任务配方 / 查看配方」按钮拉取配方，一键复制 JSON / Markdown，或「另存文件」写盘 |
+| **可微调** | 配方卡里直接改首帧/尾帧/视频 prompt、ref_strength、时长 → 「应用微调并重跑此镜」：后端 `apply_shot_patch` 白名单深合并 → `shot_patch_to_scene_fields` 写回 scene → 从该镜续跑（只清产物、**保留 render_params**） |
+
+**接口（static_server.py）**：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET  | `/recipe/{thread_id}` | 即时从 checkpoint 构建整任务配方 + 可读 Markdown |
+| POST | `/recipe/{thread_id}/save` | 落盘为 `output/recipes/<thread>/*.json` |
+| POST | `/recipe/{thread_id}/apply` | 微调：写回某镜配方并标记从该镜重跑 |
+
+**前端**：`components/RecipeCard.tsx`（配方面板：镜头列表 + 可编辑字段 + 只读参数 +
+复制/另存/应用）+ `lib/recipeClient.ts`；`SceneGallery` 每张镜头卡加「🧾 查看配方」，
+标题区加「🧾 任务配方」。
+
+**注意**：`render_params` 由「替换」改为「合并写入」（`video_gen_node` 不再冲掉
+`image_gen_node` / `end_frame_gen_node` 已写的首/尾帧段），旧键
+（backend / quality_tier / duration / video_prompt / use_first_last_frame）原样保留，
+对 P1-3 外科手术向后兼容。整个 P2-4 路径**零额度**（纯序列化 + 本地 JSON）。
+
+---
+
+### P1-6 审核飞轮（Review Flywheel）
+
+把每次 HITL 人审决策结构化成可复用的 **(rejected, chosen) 偏好对**，攒够后离线蒸馏一个「自动审核员」，把多道人审逐步收敛为 1 道 final review。
+
+#### 三层结构
+
+| 层 | 位置 | 作用 |
+|---|---|---|
+| 收集端 | `review_flywheel.record_decision()`（挂载于 `nodes/common.py::_decide`，6 处闸口统一收口） | 闸口消费决策时自动配对 chosen/rejected |
+| 存储端 | `workspace/_training_data/multimedia_review_pairs.jsonl` | 每条偏好对一行 JSON；可导出 DPO / SFT |
+| 收敛端 | `scripts/distill_reviewer.py` → `review_policy.json`；`review_flywheel.suggest()` | 离线蒸馏轻量策略；影子模式给建议（不拦主流程） |
+
+#### 偏好对的构成规则
+
+| 场景 | 是否构对 | chosen / rejected |
+|---|---|---|
+| `edit_prompt` / 编辑后提交 | ✅ 立即成对 | rejected = 原产物，chosen = 人改后的产物 |
+| `rewrite` → 之后再 approve | ✅ 配对成对 | rejected = 重写前产物，chosen = 重写后最终通过版（保留首次理由） |
+| 直接 `approve`（无 pending） | ❌ | 无偏好信号 |
+| `auto_mode` 自动放行 | ❌（计入 auto 计数） | 无人工介入 |
+
+偏好对结构（`multimedia.review_pair.v1`）：
+
+```json
+{
+  "schema": "multimedia.review_pair.v1",
+  "pair_id": "a1b2c3d4e5f6",
+  "gate": "image_review",
+  "scene_index": 1,
+  "source": "rewrite",
+  "decision": {"action": "approve", "fix_type": null, "edited_by_human": false, "reason": "人物比例失真"},
+  "rejected": {"kind": "image", "text": "", "url": "http://.../bad.png", "meta": {"portrait_similarity": 0.1}},
+  "chosen":   {"kind": "image", "text": "", "url": "http://.../good.png", "meta": {}},
+  "context": {"script": "对峙", "style_key": "xianxia", "quality_tier": "standard"},
+  "thread_id": "t2", "created_at": "2026-10-03T11:05:00"
+}
+```
+
+#### 离线蒸馏与影子模式
+
+```bash
+# 1) 查看飞轮积累进度
+python scripts/distill_reviewer.py --stats
+
+# 2) 蒸馏（默认单闸口 ≥5 对文本可比偏好对才产出策略）
+python scripts/distill_reviewer.py --min-pairs 8 --export-dpo --export-sft
+
+# 3) 影子模式：只记录「自动审核员 vs 人审」的建议，不改变主流程
+MULTIMEDIA_AUTO_REVIEW=shadow        # 全闸口影子
+MULTIMEDIA_AUTO_REVIEW=image_review  # 仅指定闸口
+```
+
+蒸馏策略形态为 **词面对比**（log-odds 判别词表 + 最优切点阈值）——零依赖、可解释；`MULTIMEDIA_REVIEW_POLICY_PATH` 可指定策略路径。embedding 通道恢复后可在此处平滑替换为向量质心，接口不变。
+
+#### 环境变量
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `MULTIMEDIA_FLYWHEEL_ENABLED` | `1` | 收集端总开关 |
+| `MULTIMEDIA_FLYWHEEL_DIR` | `workspace/_training_data` | 偏好对落盘目录 |
+| `MULTIMEDIA_REVIEW_POLICY_PATH` | `<dir>/review_policy.json` | 蒸馏策略路径 |
+| `MULTIMEDIA_AUTO_REVIEW` | `off` | 影子模式：`off` / `shadow` / `all` / `<gate1,gate2>` |
+
+设计约束：零外部依赖、零侵入（`_decide` 收口处 +1 次调用）、绝不阻断（全部 try/except 兜底）。
+
+---
+
+### P2-5 叙事结构参数化（Narrative Parameterization）
+
+把「拆几个镜头、每个镜头承担什么叙事功能」从 prompt 里的**硬编码常量**，提升为
+**由目标时长驱动、可自适应伸缩**的模板层。
+
+#### 改造前的问题
+
+| 问题 | 证据 |
+|---|---|
+| 镜头数硬编码 | `prompts.SHOWRUNNER_PROMPT` 原文写死「包含2个连续镜头」 |
+| `scene_count_range` 是死字段 | `_CONTENT_TYPE_PRESETS` 定义了 6 种范围，**从未被任何代码消费** |
+| 结构一刀切 | 15s 快闪与 3min 短剧集走同一结构，无「集」概念 |
+| 无目标时长输入 | `state` 无 `target_duration` / `episode` 字段 |
+
+#### 三层参数化
+
+<div class="rich-grid">
+<div class="rich-card"><div class="rich-card-title">时长 → 镜头数</div>target_duration ÷ 8s/镜 → ceil → 按 content_type 的 scene_count_range 钳制</div>
+<div class="rich-card"><div class="rich-card-title">类型 → beat 模板</div>6 个 content_type 各映射一个叙事弧模板（crescendo/arc/flat_wave/rhythmic/single_peak/ascending_steps）</div>
+<div class="rich-card"><div class="rich-card-title">模板 → 自适应伸缩</div>expand_beats(template, n) 保证恰好 n 个 beat，首 setup / 尾 resolution / climax 靠后</div>
+</div>
+
+#### 核心模块：`tools/narrative.py`
+
+| API | 职责 |
+|---|---|
+| `plan_scene_count(target_duration, content_type, shot_seconds=8.0)` | 时长 → 镜头数（护栏 `[2, 20]` + content_type 范围） |
+| `NARRATIVE_TEMPLATES` | 6 个模板：刚性 anchors（含 develop，保证三幕完整）+ 填充池 fillers |
+| `expand_beats(template_key, n)` | 保形伸缩为恰好 n 个 beat（不变量：首 setup、末 resolution、保 climax） |
+| `scene_count_hint(...)` | 生成注入 showrunner 的中文镜头数约束（`max_shots`/smoke 优先） |
+| `resolve_target_duration / resolve_episode` | 从 state 读取（含非法值兜底） |
+| `format_episode_anchors_hint(anchors)` | 上集 end_state 锚点 → 本集承接提示 |
+| `export_episode_assets(sheets, anchors)` | 本集资产 + 锚点 → 下一集可复用快照 |
+| `build_series_inputs(task, episode_tasks, n, dur)` | 构造连续剧每集初始输入 |
+
+#### 连续剧化（跨集接力）
+
+```
+第 N 集 end_state ──export_episode_assets──▶ {series_assets, episode_anchors}
+                                                    │
+第 N+1 集 initial state ◀── 注入 ────────────────────┘
+    · series_assets   → design.reference_gen 直接复用（省额度 + 跨集角色一致）
+    · episode_anchors → showrunner 注入「承接上集」提示（尾帧/色调/角色/能量）
+```
+
+新增 CLI：`scripts/run_series.py`（逐集驱动 + 自动 approve + 集间接力），
+亦提供 `--dry-run` 零额度查看每集将注入的输入。
+
+#### 改动文件
+
+| 文件 | 改动 |
+|---|---|
+| `tools/narrative.py` | **新增**：全部模板与编排函数 |
+| `state.py` | +4 字段：`target_duration` / `episode` / `episode_anchors` / `series_assets` |
+| `prompts.py` | `SHOWRUNNER_PROMPT`：硬编码「2 个镜头」→ `{scene_count_hint}` 占位 |
+| `nodes/scripting.py` | showrunner 接时长驱动；`_build_narrative_arc` 回退改模板驱动；episode 承接 |
+| `nodes/design.py` | 跨集 `series_assets` 复用（跳过参考图生成） |
+| `scripts/run_series.py` | **新增**：跨集编排 CLI |
+| `graph.py` | 修复兼容层遗漏：补导出 `make_thread_config`（run_stories.py 依赖） |
+
+#### 环境/行为
+
+- `target_duration` 缺省时不硬性约束镜头数，只注入「叙事结构偏好」提示（向后兼容）。
+- 3 镜以下豁免三幕完整性硬校验（篇幅天然不足，避免无谓重试）。
+- `max_shots` / SMOKE 模式仍最高优先（免费额度截断保护）。
+
+---
+
+### F-6 移动端与窄屏审计（Mobile & Narrow-Screen Audit）
+
+把「桌面优先」的前端补上移动端能力：三处关键区在窄屏可用，并顺带把 85KB 单文件
+`styles.css` 重构为**令牌 / 布局 / 组件 / 响应式**四层。
+
+#### 改造前的问题
+
+| 问题 | 证据（改造前磁盘状态） |
+|---|---|
+| 布局硬绑双列 | `.app { grid-template-columns: 280px 1fr }`，1100px 以下仅简单塌陷为单列 |
+| 侧栏在手机上霸屏 | 单列后 `.sidebar` 变成一整块堆在内容**上方**，须滚过整屏才见到主体 |
+| 嵌套滚动 | `.main` / `.product-zone` 用 `max-height: 100vh` + `overflow-y:auto`；手机地址栏伸缩时 100vh 失准、双滚动层相互抢手势 |
+| 无手机断点 | 仅 1100 / 900 / 720px 三处零散 media query，无 768 / 430 层 |
+| 触控目标偏小 | 审核按钮约 39px 高（低于 44px 触控下限） |
+| iOS 聚焦缩放 | 表单控件字号 12–13px，iOS 聚焦时自动放大整页 |
+| 单文件难维护 | `styles.css` 85KB / 3,883 行，无分层 |
+
+#### 四层样式架构
+
+```
+src/styles.css          入口：仅 4 行 @import（Vite 内联为单一 CSS 产物）
+  └─ styles/tokens.css     设计令牌（:root 变量）+ reset + body
+  └─ styles/layout.css     App shell / 侧栏 / 主区 / 顶栏 / 内容栅格
+  └─ styles/components.css 面板 / 按钮 / 表单 / 媒体 / 时间轴 / 审核卡 / 画廊
+  └─ styles/responsive.css 移动端适配层（最后加载，用于覆盖）
+```
+
+分层是**按原行范围机械切分**（1–57 / 58–406 / 407–末），切分脚本内置
+「拼接后逐字节等于原文」断言，因此拆分**零逻辑变更**。
+
+#### 断点体系（responsive.css）
+
+| 断点 | 覆盖场景 | 主要动作 |
+|---|---|---|
+| `≤1024px` | 平板 / 小笔记本 | 解除 `100vh` 固定高度与嵌套滚动 |
+| `≤900px` | 手机横屏 / 平板竖屏 | 侧栏改**左侧抽屉**；三处关键区适配 |
+| `≤768px` | 手机 | 排版降级、输入控件字号 ≥16px、Tab 条横向滚动 |
+| `≤430px` | 小屏手机 | 进一步收紧字号与内边距 |
+| `pointer: coarse` | 触控设备 | 统一放大点击目标至 ≥44px |
+
+#### 三处关键区（路线图硬指标）
+
+<div class="rich-grid">
+<div class="rich-card"><div class="rich-card-title">① 审核卡片</div>操作按钮由横排改**纵向全宽**（46px 高）；修正方式单列；候选关键帧横向滚动；通过后锁定项加大点击区；textarea 16px 防 iOS 缩放</div>
+<div class="rich-card"><div class="rich-card-title">② 成片播放</div>视频撑满内容宽、限高 <code>56dvh</code>；下载 / 无音轨链接改**纵向卡片式**（≥44px）</div>
+<div class="rich-card"><div class="rich-card-title">③ 进度时间轴</div>解除 <code>max-height</code> 锁；标题行可换行；音频子步骤自动折行</div>
+</div>
+
+#### 移动端导航抽屉
+
+`≤900px` 时侧栏由文档流改为 `position: fixed` 抽屉：
+
+```
+app-header [☰ 会话] ──点击──▶ .app.nav-open + .sidebar.open
+                                   │  translateX(-100% → 0)
+                                   ├─ .nav-scrim 遮罩（点击关闭）
+                                   └─ .sidebar-close 关闭按钮
+选中任一历史会话 ──▶ 自动收起抽屉
+```
+
+`.nav-scrim` 默认 `display: none`（桌面即便误渲染也不占位，不破坏 grid 轨道）。
+
+#### 改动文件
+
+| 文件 | 改动 |
+|---|---|
+| `src/styles.css` | 85KB 单文件 → 4 行 `@import` 入口 |
+| `src/styles/{tokens,layout,components}.css` | **新增**：按原行范围机械切分 |
+| `src/styles/responsive.css` | **新增**：移动端适配层 |
+| `src/App.tsx` | 抽屉状态 + 汉堡按钮 + 遮罩 + 侧栏 props |
+| `src/components/ThreadSidebar.tsx` | `mobileOpen` / `onClose` props + 关闭按钮 + 选中自动收起 |
+| `index.html` | `viewport-fit=cover`、`theme-color`、`color-scheme`、`mobile-web-app-capable` |
+| `scripts/audit-mobile.mjs` | **新增**：CDP 窄屏审计工具（多断点断言，退出码可入 CI） |
+| `scripts/mobile-audit-fixture.html` | **新增**：审计夹具（三处关键区 DOM） |
+| `scripts/check-css-layers.mjs` | **新增**：CSS 分层与内联产物校验 |
+
+#### 验证方式（客观测量，非肉眼）
+
+用 Chrome DevTools Protocol 在真机视口（390 / 430 / 768 / 1280）下渲染，读取
+`getBoundingClientRect` / `getComputedStyle` 做断言，并验证真实应用的抽屉交互：
+
+```bash
+cd frontend
+npm run build
+node scripts/audit-mobile.mjs      # 48/48 断言（4 断点 × 三处关键区 + 导航抽屉）
+node scripts/check-css-layers.mjs  # 19/19 分层与内联校验
+```
+
+真实应用（vite dev）抽屉链路实测：汉堡可见 → 点击后 `.app.nav-open` +
+`sidebar translateX(0)` → 遮罩 `display:block` → 点遮罩后回到 `translateX(-330px)`。
+
+---
+
 ### 持久化机制
 
 | 层 | 技术 | 存储位置 | 用途 |
@@ -341,7 +856,18 @@ my-langgraph-practice-main/
 │
 ├── src/agent/multimedia/
 │   ├── __init__.py
-│   ├── graph.py                      # 22 节点 StateGraph 定义 + 编译 (~1151 行)
+│   ├── graph.py                      # 兼容层：再导出 nodes/ 全部实现（P2-3 后 ~90 行）
+│   ├── nodes/                        # P2-3：原 graph.py 单体按 stage 拆分
+│   │   ├── __init__.py               #   包入口（stdout/stderr UTF-8 容错）
+│   │   ├── common.py                 #   跨 stage 常量 / 纯工具 / 风格与 prompt 工具箱
+│   │   ├── scripting.py              #   脚本与规划（视觉上下文 / 镜头策略 / 序列编排 / showrunner）
+│   │   ├── design.py                 #   视觉设计（参考图生成 / 资产匹配）
+│   │   ├── director.py               #   导演（电影级评审 / 精修 / 影棚 / 首尾帧导演 / 运镜）
+│   │   ├── render.py                 #   渲染（关键帧 / 尾帧 / 视频生成 + 审核闸口）
+│   │   ├── assemble.py               #   成片（推进 / 中止 / 拼接 / 草稿审片 / 混音）
+│   │   ├── routing.py                #   路由决策（decide_*）
+│   │   ├── parallel.py               #   并行 / 链式扇出（Send fan-out / 镜头子图 / FLF 链）
+│   │   └── wiring.py                 #   图组装与编译（build + compile + thread 状态查询）
 │   ├── state.py                      # MultimediaState TypedDict (~48 行)
 │   ├── prompts.py                    # 9 个 Prompt 模板 (~184 行)
 │   ├── checkpointer.py               # SQLite checkpointer 单例 (~47 行)
@@ -355,7 +881,7 @@ my-langgraph-practice-main/
 │   ├── cinematography_agent.py       # Phase 5 子Agent: 摄影指导
 │   ├── lighting_agent.py             # Phase 5 子Agent: 灯光指导
 │   ├── editor_agent.py               # Phase 5 子Agent: 剪辑指导
-│   ├── cinematic_memory.py           # 跨 scene 风格一致性 memory bank
+│   ├── cinematic_memory.py           # 跨 scene 风格一致性 memory bank（thread 作用域 + data/memory 落盘）
 │   │
 │   ├── tools/
 │   │   ├── text_llm.py               # DashScope 文本 LLM (tongyi-xiaomi-analysis-pro)

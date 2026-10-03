@@ -274,6 +274,7 @@ def orchestrate_film_studio(
     scene_index: int = 0,
     total_scenes: int = 1,
     global_setting: str = "",
+    thread_id: str = "",
 ) -> Dict[str, Any]:
     """
     电影工作室编排器核心函数。
@@ -288,6 +289,7 @@ def orchestrate_film_studio(
         scene_index: 当前场景索引
         total_scenes: 总场景数
         global_setting: 全局视觉设定
+        thread_id: 线程标识（P0-3：记忆库作用域 + 持久化键）
 
     Returns:
         {
@@ -303,7 +305,7 @@ def orchestrate_film_studio(
         }
     """
     # 获取前场景风格（用于跨场景一致性）
-    prev_style = get_previous_scene_style(scene_index)
+    prev_style = get_previous_scene_style(thread_id, scene_index)
 
     # ── Step 1: Cinematography Agent ──
     cine_result = optimize_cinematography(
@@ -331,6 +333,7 @@ def orchestrate_film_studio(
 
     # ── Step 5: 记录风格到记忆库 ──
     record_scene_style(
+        thread_id=thread_id,
         scene_index=scene_index,
         cinematography=cine_result,
         lighting=light_result,
@@ -338,7 +341,7 @@ def orchestrate_film_studio(
     )
 
     # ── Step 6: 生成全局电影意识报告 ──
-    film_brain = generate_film_brain_report(global_setting, total_scenes)
+    film_brain = generate_film_brain_report(global_setting, total_scenes, thread_id=thread_id)
 
     # ── Step 7: 计算团队共识评分 ──
     scores = [

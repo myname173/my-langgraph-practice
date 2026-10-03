@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P0-3 记忆持久化 · 交付报告</title>
+<style>
+  :root{
+    --bg:#f5f6f6;
+    --paper:#fbfbfa;
+    --ink:#16191b;
+    --ink-soft:#5a6367;
+    --ink-faint:#8b9296;
+    --hair:#d7dadd;
+    --hair-soft:#e6e8e9;
+    --accent:#0e5f6e;
+    --accent-soft:rgba(14,95,110,.07);
+    --ok:#1f6f43;
+    --warn:#8a4b1f;
+    --sans:"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans SC","Hiragino Sans GB",sans-serif;
+    --mono:"Cascadia Code","Consolas","SFMono-Regular","JetBrains Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:var(--sans);font-size:16px;line-height:1.6;
+    font-feature-settings:"kern" 1;
+  }
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft)}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 40px}
+  .masthead{border-bottom:1px solid var(--hair);padding:22px 0}
+  .masthead .wrap{display:flex;justify-content:space-between;align-items:baseline;gap:24px;flex-wrap:wrap}
+  .logotype{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft)}
+  .masthead .meta{font-family:var(--mono);font-size:12px;letter-spacing:.04em;color:var(--ink-faint)}
+
+  .cover{padding:72px 0 40px;border-bottom:1px solid var(--hair)}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+  .cover h1{margin:18px 0 0;font-size:47px;line-height:1.06;letter-spacing:-.025em;font-weight:600;max-width:20ch}
+  .cover .sub{margin:20px 0 0;font-size:19px;line-height:1.5;color:var(--ink-soft);max-width:56ch}
+  .cover .facts{margin-top:34px;display:flex;flex-wrap:wrap;gap:0}
+  .cover .facts div{border-right:1px solid var(--hair);padding:0 26px}
+  .cover .facts div:first-child{padding-left:0}
+  .cover .facts div:last-child{border-right:0}
+  .cover .facts dt{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:0}
+  .cover .facts dd{margin:6px 0 0;font-size:15px;font-weight:600}
+
+  .layout{display:grid;grid-template-columns:212px 1fr;gap:64px;padding:56px 0 24px}
+  nav.toc{align-self:start;position:sticky;top:32px}
+  nav.toc .ttl{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:14px}
+  nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:s}
+  nav.toc li{counter-increment:s;margin:0 0 11px;font-size:13.5px;line-height:1.4}
+  nav.toc li a{color:var(--ink-soft);border:0;display:flex;gap:10px}
+  nav.toc li a::before{content:counter(s,decimal-leading-zero);font-family:var(--mono);font-size:11px;color:var(--ink-faint);padding-top:2px}
+
+  main{min-width:0}
+  section.chapter{padding:0 0 46px;margin:0 0 46px;border-bottom:1px solid var(--hair-soft)}
+  section.chapter:last-child{border-bottom:0}
+  .sec-num{font-family:var(--mono);font-size:12px;letter-spacing:.12em;color:var(--accent)}
+  h2{margin:8px 0 20px;font-size:27px;line-height:1.18;letter-spacing:-.015em;font-weight:600}
+  h3{margin:30px 0 12px;font-size:17.5px;font-weight:600;letter-spacing:-.005em}
+  p{margin:0 0 16px;max-width:74ch}
+  .lede{font-size:17.5px;line-height:1.62;color:#2a3134;max-width:70ch}
+  strong{font-weight:600}
+  code{font-family:var(--mono);font-size:.88em;background:var(--accent-soft);padding:1px 5px;color:#0b4b57}
+
+  .steps{list-style:none;margin:6px 0 0;padding:0}
+  .steps li{position:relative;padding:0 0 22px 34px;border-left:1px solid var(--hair)}
+  .steps li:last-child{border-left-color:transparent;padding-bottom:0}
+  .steps li::before{
+    counter-increment:st;content:counter(st,decimal-leading-zero);
+    position:absolute;left:-13px;top:0;width:26px;height:26px;border:1px solid var(--hair);background:var(--paper);
+    font-family:var(--mono);font-size:11px;color:var(--accent);display:flex;align-items:center;justify-content:center;
+  }
+  .steps{counter-reset:st}
+  .steps .st-title{font-weight:600;font-size:16px}
+  .steps .st-text{color:var(--ink-soft);font-size:14.5px;line-height:1.55;margin-top:3px}
+
+  table{width:100%;border-collapse:collapse;margin:8px 0 4px;font-size:14px}
+  caption{caption-side:top;text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);padding-bottom:10px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--hair-soft);vertical-align:top}
+  thead th{border-bottom:1px solid var(--hair);font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);font-weight:500}
+  tbody tr:last-child td{border-bottom:1px solid var(--hair)}
+  td.mono{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft)}
+  .tag{display:inline-block;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border:1px solid var(--hair);color:var(--ink-soft)}
+  .tag.ok{color:var(--ok);border-color:rgba(31,111,67,.35)}
+
+  .callout{border-left:1px solid var(--accent);padding:2px 0 2px 20px;margin:22px 0}
+  .callout .ct{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+  .callout p{margin:6px 0 0;color:#2a3134}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:6px}
+  .cols .c h4{margin:0 0 8px;font-size:14px;font-weight:600;font-family:var(--mono);letter-spacing:.02em}
+  .cols .c p{font-size:14.5px;color:var(--ink-soft);margin:0}
+
+  .colophon{border-top:1px solid var(--hair);padding:26px 0 60px;color:var(--ink-faint);font-family:var(--mono);font-size:11.5px;letter-spacing:.03em;display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+
+  @media (max-width:960px){
+    .wrap{padding:0 22px}
+    .layout{grid-template-columns:1fr;gap:32px}
+    nav.toc{position:static;border-bottom:1px solid var(--hair-soft);padding-bottom:24px}
+    .cover h1{font-size:35px}
+    .cols{grid-template-columns:1fr}
+    .cover .facts div{padding:0 16px}
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <span class="logotype">Multimedia Agent · 架构加固</span>
+    <span class="meta">P0 路线图 · 收官项 · 2026-10-02</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="cover">
+    <div class="kicker">P0-3 · 记忆持久化</div>
+    <h1>跨镜头风格记忆，不再随进程消失</h1>
+    <p class="sub">把 <code>cinematic_memory</code> 从「进程内单例」改造为「按线程作用域 + 落盘持久化」，修复长任务中断恢复后跨镜头一致性静默退化的问题。</p>
+    <dl class="facts">
+      <div><dt>状态</dt><dd>已完成</dd></div>
+      <div><dt>验收</dt><dd>零额度通过</dd></div>
+      <div><dt>跨进程重建</dt><dd>3 进程全绿</dd></div>
+      <div><dt>单测</dt><dd>5 / 5</dd></div>
+    </dl>
+  </div>
+
+  <div class="layout">
+    <nav class="toc">
+      <div class="ttl">目录</div>
+      <ol>
+        <li><a href="#problem">问题定位</a></li>
+        <li><a href="#mechanism">修复语义</a></li>
+        <li><a href="#evidence">验证证据</a></li>
+        <li><a href="#changed">改动清单</a></li>
+        <li><a href="#next">影响与下一步</a></li>
+      </ol>
+    </nav>
+
+    <main>
+      <section class="chapter" id="problem">
+        <div class="sec-num">01</div>
+        <h2>问题定位</h2>
+        <p class="lede">记忆库原本是一个模块级 dict 单例 <code>_memory_bank</code>，只活在进程内存里。长任务（尤其是跑到一半被中断、随后恢复的那种）一旦换进程，风格记忆就直接清零。</p>
+        <p>后果是隐性的：恢复后的 <code>film_studio</code> 拿到空的风格上下文，<code>get_previous_scene_style()</code> 返回 <code>None</code>，后续镜头照常生成、也不报错——但镜头之间的视觉语言已经在无人察觉的情况下漂移了。这类退化没有任何日志告警，属于最难排查的一类。</p>
+        <div class="callout">
+          <div class="ct">同时审计的一项</div>
+          <p><code>reference_embeddings</code>（角色一致性向量）经核查<strong>已经在</strong> <code>MultimediaState</code> 通道里，随 SqliteSaver 快照持久化（graph 写入 / qc 消费），且 <code>embedding.py</code> 无模块级值缓存——本项无需改动。</p>
+        </div>
+      </section>
+
+      <section class="chapter" id="mechanism">
+        <div class="sec-num">02</div>
+        <h2>修复语义</h2>
+        <p>采用「线程作用域 + 写即落盘 + 缓存层」的三层结构，保持原有 API 语义不变，只把作用域从「全局单例」收窄到「线程」。</p>
+        <ol class="steps">
+          <li>
+            <div class="st-title">按线程分片</div>
+            <div class="st-text">记忆库按 <code>thread_id</code> 隔离，落盘到 <code>data/memory/&lt;thread_id&gt;.json</code>；不同任务线程互不可见。</div>
+          </li>
+          <li>
+            <div class="st-title">写入即原子落盘</div>
+            <div class="st-text">每次 <code>record_scene_style()</code> 后写临时文件再 rename 替换，杜绝半截文件；落盘失败仅告警、不阻断主流程。</div>
+          </li>
+          <li>
+            <div class="st-title">首次访问自动重建</div>
+            <div class="st-text">新进程第一次读某线程记忆时，发现缓存未加载即从磁盘 JSON 重建——这正是「中断恢复」场景的核心修复点。</div>
+          </li>
+          <li>
+            <div class="st-title">新 run 按线程清空</div>
+            <div class="st-text"><code>reset_memory(thread_id)</code> 在新 run 开始时同时清缓存与落盘文件；恢复中断线程不走该节点，记忆因此得以保留。</div>
+          </li>
+        </ol>
+        <p style="margin-top:22px">模块级 dict 退化为<strong>进程内缓存层</strong>，磁盘才是事实来源。<code>reference_embeddings</code> 的审计结论见上一节。</p>
+      </section>
+
+      <section class="chapter" id="evidence">
+        <div class="sec-num">03</div>
+        <h2>验证证据</h2>
+        <p>全部验证零额度、无真实模型调用；跨进程测试用三次独立解释器调用完成，杜绝「同进程内清缓存」的伪验证。</p>
+        <table>
+          <caption>验收矩阵</caption>
+          <thead>
+            <tr><th>验证项</th><th>方法</th><th>结果</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>跨进程重建</td><td class="mono">独立进程 write → 全新进程 recover</td><td><span class="tag ok">通过</span> 重建 2 镜头快照</td></tr>
+            <tr><td>线程隔离</td><td class="mono">另一 thread_id 查询</td><td><span class="tag ok">通过</span> 互不可见</td></tr>
+            <tr><td>reset 双清</td><td class="mono">清缓存 + 删落盘</td><td><span class="tag ok">通过</span> 文件消失</td></tr>
+            <tr><td>单测套件</td><td class="mono">unittest 5 例</td><td><span class="tag ok">5 / 5 · 0.029s</span></td></tr>
+            <tr><td>全链路回归</td><td class="mono">dry_run_full.py（mock 模型边界）</td><td><span class="tag ok">EXIT=0</span> 5/5 槽位对齐</td></tr>
+          </tbody>
+        </table>
+        <p style="margin-top:14px;font-size:14px;color:var(--ink-soft)">全链路 runs 耗时约 225–247s，<code>parallel=True</code>，5 个镜头槽位全部对齐、无串槽，成片（含字幕与混音）正常产出。</p>
+      </section>
+
+      <section class="chapter" id="changed">
+        <div class="sec-num">04</div>
+        <h2>改动清单</h2>
+        <table>
+          <caption>涉及文件</caption>
+          <thead>
+            <tr><th>文件</th><th>改动</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="mono">cinematic_memory.py</td><td>重写：线程作用域 + 原子落盘 + 首次访问重建；函数新增 <code>thread_id</code> 参数</td></tr>
+            <tr><td class="mono">film_studio_orchestrator.py</td><td>透传 <code>thread_id</code> 至记忆库三个调用点</td></tr>
+            <tr><td class="mono">graph.py</td><td>film_studio 节点传 <code>thread_id</code>；showrunner 的 <code>reset_memory</code> 带线程标识</td></tr>
+            <tr><td class="mono">tests/unit_tests/test_cinematic_memory.py</td><td>新增：5 例持久化单测（tempdir 隔离，零额度）</td></tr>
+            <tr><td class="mono">PROJECT_DESCRIPTION.md</td><td>更新记忆库描述：单例 → 线程作用域 + 落盘</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="chapter" id="next">
+        <div class="sec-num">05</div>
+        <h2>影响与下一步</h2>
+        <div class="cols">
+          <div class="c">
+            <h4>影响</h4>
+            <p>从「进程内存」升级为「磁盘持久」后，长任务中断恢复不再丢风格上下文；单次额外 IO 与主流程耗时可忽略，且落盘失败自动降级为空记忆，不引入新的失败面。</p>
+          </div>
+          <div class="c">
+            <h4>边界</h4>
+            <p>并行模式（P0-2）下 film_studio 在扇出前仅运行一次，记忆库因此只记录一次规划快照——这是既有文档化降级，与持久化正交，本次未改变。</p>
+          </div>
+        </div>
+        <p style="margin-top:24px">P0 层至此四项全部落地（三档质量 / 镜头并行 / 熔断台账 / 记忆持久化）。建议的后续：先在有小额免费额度时做一次真实 2 镜头冒烟，再推进 P1-1 首尾帧链式衔接。</p>
+      </section>
+    </main>
+  </div>
+</div>
+
+<footer class="colophon">
+  <span>Multimedia Agent · 架构加固 P0-3</span>
+  <span>验证环境：system Python 3.14 · 零额度 · mock 模型边界</span>
+</footer>
+
+</body>
+</html>

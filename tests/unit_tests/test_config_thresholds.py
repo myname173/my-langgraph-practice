@@ -10,6 +10,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _SRC_ROOT = os.path.join(_PROJECT_ROOT, "src")
@@ -33,8 +34,8 @@ class TestConfigLoading(unittest.TestCase):
     def test_thresholds_loaded(self):
         from agent.multimedia.config_loader import load_thresholds
         t = load_thresholds()
-        self.assertEqual(t["character_consistency_threshold"], 0.5)
-        self.assertEqual(t["max_video_gen_failures"], 2)
+        self.assertEqual(t["character_consistency_threshold"], 0.28)
+        self.assertEqual(t["max_video_gen_failures"], 6)
         self.assertEqual(t["max_rewrites"], 2)
         qs = t["quality_score"]
         self.assertEqual(qs["excellent"], 0.8)
@@ -61,18 +62,15 @@ class TestConfigLoading(unittest.TestCase):
 
 class TestEnvOverride(unittest.TestCase):
     def test_consistency_threshold_env(self):
-        os.environ["CHARACTER_CONSISTENCY_THRESHOLD"] = "0.8"
-        try:
+        # 用 patch.dict 注入：退出时自动恢复原值。
+        # 不能用 del os.environ[...] —— 那会删掉 load_dotenv() 从 .env 注入的全局值，
+        # 污染同进程内后续测试（曾使 test_graph_routing 的常量/函数读取不一致）。
+        with mock.patch.dict(os.environ, {"CHARACTER_CONSISTENCY_THRESHOLD": "0.8"}):
             self.assertEqual(character_consistency_threshold(), 0.8)
-        finally:
-            del os.environ["CHARACTER_CONSISTENCY_THRESHOLD"]
 
     def test_max_failures_env(self):
-        os.environ["MAX_VIDEO_GEN_FAILURES"] = "5"
-        try:
+        with mock.patch.dict(os.environ, {"MAX_VIDEO_GEN_FAILURES": "5"}):
             self.assertEqual(max_video_gen_failures(), 5)
-        finally:
-            del os.environ["MAX_VIDEO_GEN_FAILURES"]
 
 
 class TestFocusFallback(unittest.TestCase):

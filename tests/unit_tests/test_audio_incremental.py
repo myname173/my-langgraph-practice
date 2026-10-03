@@ -138,9 +138,10 @@ class TestMixAudio(unittest.TestCase):
         # 验证产物确实带音轨，且时长与视频对齐
         with AudioFileClip(result) as a:
             self.assertGreater(a.duration, 0, "产物应含音轨")
-        # mix_audio 不裁剪视频长度，时长应与原视频一致
+        # mix_audio 不裁剪视频：配音长于视频时冻结末帧延长（保证台词完整），
+        # 故产物时长 ≥ 原视频时长。
         with VideoFileClip(result) as v:
-            self.assertAlmostEqual(v.duration, 2.0, delta=0.2)
+            self.assertGreaterEqual(v.duration, 2.0 - 0.2)
 
     def test_mix_audio_skips_when_voiceover_missing(self):
         # 配音缺失时应直接返回原视频路径（不报错）

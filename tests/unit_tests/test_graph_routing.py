@@ -128,12 +128,13 @@ def test_decide_image_quality_low_portrait_sim_triggers_regeneration():
 
 
 def test_decide_image_quality_low_sim_but_quota_exhausted_passes():
-    # 已达重生上限（iterations >= 3）→ 即便一致性不足也放行，避免白耗额度
+    # 一致性重试预算耗尽（consistency_attempts >= 3）→ 即便相似度不足也放行，避免白耗额度。
+    # 该预算由 consistency_attempts 独立计数（P1-4 起与通用 iterations 分离）。
     thr = character_consistency_threshold()
     state = _base_state()
     scene = state["scenes"][0]
     scene["is_perfect"] = True
-    scene["iterations"] = 3
+    scene["consistency_attempts"] = 3
     scene["portrait_similarity"] = thr - 0.1
     assert graph.decide_image_quality(state) == "videographer"
 

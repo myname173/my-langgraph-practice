@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLaMA-Factory 微调实验 · 面试官介绍（专业版）</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1e2230; --line:#2a2f3d;
+    --txt:#e6e9ef; --mut:#9aa3b2; --acc:#6ea8fe; --acc2:#7ef0c0;
+    --warn:#ffcf6e; --bad:#ff7a7a; --good:#5be3a0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.75;font-size:16px}
+  .wrap{max-width:1000px;margin:0 auto;padding:48px 24px 96px}
+  header.hero{padding:40px 0 28px;border-bottom:1px solid var(--line);margin-bottom:32px}
+  .tag{display:inline-block;font-size:12px;letter-spacing:1px;color:var(--acc);
+    border:1px solid var(--acc);border-radius:999px;padding:3px 12px;margin-bottom:18px}
+  h1{font-size:33px;line-height:1.25;margin:0 0 12px;font-weight:800}
+  h1 .hl{color:var(--acc2)}
+  .sub{color:var(--mut);font-size:16px;max-width:780px}
+  h2{font-size:23px;margin:54px 0 16px;padding-left:12px;border-left:4px solid var(--acc)}
+  h3{font-size:18px;margin:26px 0 10px;color:var(--acc2)}
+  p{margin:12px 0;color:#d7dce6}
+  .mut{color:var(--mut)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:22px 24px;margin:18px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:760px){.grid2,.grid3{grid-template-columns:1fr}}
+  .kpi{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:18px;text-align:center}
+  .kpi .v{font-size:33px;font-weight:800;line-height:1.1}
+  .kpi .l{color:var(--mut);font-size:13px;margin-top:6px}
+  .v.good{color:var(--good)} .v.bad{color:var(--bad)} .v.acc{color:var(--acc)}
+  code{background:#0c0e14;border:1px solid var(--line);border-radius:6px;
+    padding:2px 7px;font-size:13.5px;color:#ffd9a0;font-family:"SFMono-Regular",Consolas,monospace}
+  pre{background:#0c0e14;border:1px solid var(--line);border-radius:10px;
+    padding:16px;overflow:auto;font-size:13px;line-height:1.6;color:#cfe3ff}
+  pre .c{color:var(--mut)} pre .k{color:var(--acc2)} pre .s{color:#ffd9a0} pre .n{color:#ffcf6e}
+  .bar{height:14px;border-radius:8px;background:#243047}
+  .bar > i{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,#5be3a0,#7ef0c0)}
+  .bar.bad > i{background:linear-gradient(90deg,#ff7a7a,#ffb199)}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--acc)}
+  tr:nth-child(even) td{background:#13161f}
+  .pill{display:inline-block;font-size:11.5px;padding:2px 9px;border-radius:999px;
+    background:#1b2233;color:var(--acc);border:1px solid #2c3a55}
+  .note{background:#1a1407;border:1px solid #4a3a14;color:#ffd98a;border-radius:12px;padding:16px 18px}
+  .note b{color:var(--warn)}
+  .step{display:flex;gap:14px;margin:14px 0;align-items:flex-start}
+  .step .n{flex:0 0 32px;height:32px;border-radius:50%;background:var(--acc);color:#06101f;
+    font-weight:800;display:flex;align-items:center;justify-content:center;font-size:15px}
+  .step .b{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px}
+  .analogy{border-left:3px solid var(--acc2);background:#10181a;padding:12px 16px;border-radius:0 10px 10px 0;margin:12px 0;color:#cfeede;font-size:14.5px}
+  ul{margin:10px 0;padding-left:22px} li{margin:6px 0}
+  .term{color:var(--acc);font-weight:600}
+  footer{margin-top:60px;padding-top:24px;border-top:1px solid var(--line);color:var(--mut);font-size:13px}
+  .resume{background:linear-gradient(180deg,#141824,#0f1117);border:1px solid #2c3a55;border-radius:14px;padding:22px 24px}
+  .resume h4{margin:0 0 10px;color:var(--acc)}
+  .resume li{color:#d7dce6}
+  .formula{text-align:center;font-size:18px;font-family:"SFMono-Regular",Consolas,monospace;
+    color:var(--acc2);background:#0c0e14;border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0}
+  .legend{font-size:12.5px;color:var(--mut);margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <span class="tag">LLM 微调 · 技术介绍（专业版）</span>
+    <h1>用 <span class="hl">LLaMA-Factory</span> 做 SFT：<br>把代码大模型对齐为 SWE Agent 的工具调用协议</h1>
+    <p class="sub">一个在免费 GPU（Colab T4，14.5G）上完成的端到端 <b>SFT（Supervised Fine-Tuning，监督微调）</b>实验：基座为 DeepSeek-Coder-7B，采用 <b>QLoRA（4bit 量化的 LoRA）</b>，把「通用代码 LLM」对齐（alignment）为「能按 ReAct 协议输出工具调用的 Agent 基座」。下文先建立术语体系，再用真实数据流与配置讲清每一步。</p>
+  </header>
+
+  <!-- 一、术语体系 -->
+  <h2>一、术语体系（先看这节，后面全是这些词）</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>预训练 → SFT → 对齐</h3>
+      <p><span class="term">Pre-training</span>：在海量无标注语料上做自监督（预测下一个 token），得到「懂语言/懂代码」的基座。<span class="term">SFT</span>：在「指令-回答」标注对上做有监督训练，教模型<b>按人类期望的格式与行为</b>作答。本实验就是一次 SFT，目标是对齐到 Agent 协议。</p>
+      <div class="analogy">📌 预训练 = 通识教育；SFT = 岗前培训，教具体工作流程与汇报格式。</div>
+    </div>
+    <div class="card">
+      <h3>PEFT / LoRA / QLoRA</h3>
+      <p><span class="term">PEFT</span>（参数高效微调）：只训一小部分参数。<span class="term">LoRA</span> 冻结原权重 <code>W</code>，注入低秩分解 <code>ΔW=BA</code> 只训 <code>A,B</code>。<span class="term">QLoRA</span> = LoRA + 4bit 量化基座，把 7B 压进消费级显存。</p>
+      <div class="analogy">📌 全参微调=重造手机；LoRA=装 App；QLoRA=在低端机上也能装。</div>
+    </div>
+    <div class="card">
+      <h3>灾难性遗忘 & 量化</h3>
+      <p><span class="term">灾难性遗忘</span>：小数据全参微调会冲掉基座原有能力。LoRA 冻结基座可天然规避。<span class="term">4bit NF4 量化</span>（bitsandbytes）：权重用 4 比特存储，配合 double quantization，显存降 ~4×，精度损失可控。</p>
+    </div>
+    <div class="card">
+      <h3>Agent / ReAct / SWE-bench</h3>
+      <p><span class="term">ReAct</span> 范式：Reason（推理）+ Act（行动）交替。Agent 输出 <code>Action</code>+<code>ActionInput(JSON)</code>，由外部执行器调用工具。<span class="term">SWE-bench</span>：给真实 GitHub issue，评「能否修好（resolve）」的权威榜。</p>
+      <div class="analogy">📌 Agent=真人工程师的闭环；本实验训练的是「会正确填写工单/下达指令」的那一步。</div>
+    </div>
+  </div>
+
+  <!-- 二、任务定义 -->
+  <h2>二、任务定义：一次「协议对齐」式 SFT</h2>
+  <div class="card">
+    <p>输入是一条软件缺陷报告（issue 文本）。期望输出不是自然语言分析，而是<b>可被 Agent 执行器直接解析的结构化动作</b>：</p>
+    <pre><span class="c"># 期望输出（微调后的真实样本）</span>
+<span class="k">Action</span>: analyze_issue
+<span class="k">ActionInput</span>: {<span class="s">"instance_id"</span>: <span class="s">"django__django-14559"</span>, <span class="s">"repo"</span>: <span class="s">"django/django"</span>}</pre>
+    <p>这本质是让模型学会一种<b>领域特定的序列化协议（tool-calling schema）</b>：在给定 issue 时，以高概率生成 <code>Action:</code> 前缀与合法 JSON，而非开放域文本。训练信号就来自「正确动作序列」的监督。</p>
+  </div>
+
+  <!-- 三、实验流程 -->
+  <h2>三、实验流程（含真实数据与配置）</h2>
+
+  <h3>3.1 数据工程：从轨迹到 ShareGPT 样本</h3>
+  <p>源数据来自 <span class="term">SWE-bench_Verified</span> 的成功修复轨迹，整理为 <span class="term">ShareGPT 格式</span>（<code>conversations</code> 含 <code>human</code>/<code>gpt</code> 轮）。一条训练样本长这样：</p>
+  <pre>{
+  <span class="s">"conversations"</span>: [
+    {<span class="s">"from"</span>: <span class="s">"human"</span>,
+     <span class="s">"value"</span>: <span class="s">"Issue: bulk_update() 在 nullable 字段上抛 TypeError ...（problem_statement）"</span>},
+    {<span class="s">"from"</span>: <span class="s">"gpt"</span>,
+     <span class="s">"value"</span>: <span class="s">"Action: analyze_issue\nActionInput: {\"instance_id\":\"django__django-14559\",\"repo\":\"django/django\"}"</span>}
+  ]
+}</pre>
+  <p>规模：训练集 <b>235 条</b>成功轨迹；另留 <b>20 条 held-out（同分布、seed=42 固定）</b>作为评估集，训练时<b>完全不可见</b>，防止数据泄漏导致的虚高指标。</p>
+
+  <h3>3.2 训练配置（LLaMA-Factory YAML 关键字段）</h3>
+  <pre><span class="c"># llamafactory_runs/sft_v1/sft_config.yaml（节选）</span>
+model_name_or_path: deepseek-ai/deepseek-coder-7b-instruct
+finetuning_type: <span class="n">lora</span>            <span class="c"># PEFT 方法</span>
+quantization_bit: <span class="n">4</span>             <span class="c"># QLoRA: NF4 + double quant</span>
+lora_rank: <span class="n">16</span>                  <span class="c"># 低秩维度 r</span>
+lora_alpha: <span class="n">32</span>                 <span class="c"># 缩放因子，通常 = 2×rank</span>
+lora_dropout: <span class="n">0.05</span>              <span class="c"># 正则，抑制小样本过拟合</span>
+cutoff_len: <span class="n">2048</span>                <span class="c"># 单样本最大 token 长度（上下文窗口）</span>
+num_train_epochs: <span class="n">3</span>              <span class="c"># 遍历训练集 3 遍</span>
+per_device_train_batch_size: <span class="n">1</span>    <span class="c"># T4 显存受限</span>
+gradient_accumulation_steps: <span class="n">8</span>   <span class="c"># 等效 batch=8，稳训练</span>
+learning_rate: <span class="n">2e-4</span>              <span class="c"># LoRA 常用较大 lr</span>
+lr_scheduler_type: <span class="n">cosine</span>         <span class="c"># 余弦退火</span>
+gradient_checkpointing: <span class="n">true</span>       <span class="c"># 用算力换显存</span></pre>
+
+  <h3>3.3 LoRA 的数学直觉</h3>
+  <p>原线性层计算 <code>h = Wx</code>，<code>W ∈ ℝ^{d×d}</code>。LoRA 冻结 <code>W</code>，改为：</p>
+  <div class="formula">h = Wx + ΔW·x = Wx + B·A·x&nbsp;&nbsp;(A∈ℝ^{r×d}, B∈ℝ^{d×r}, r≪d)</div>
+  <p class="legend">可训练参数量从 <code>d²</code> 降到 <code>2·d·r</code>。以 d=4096、r=16 为例：全参约 1678 万 → LoRA 仅约 13 万（≈0.8%），显存与训练成本降一个数量级，且原能力因 <code>W</code> 冻结而不被覆盖（规避灾难性遗忘）。</p>
+
+  <h3>3.4 训练执行与监控</h3>
+  <div class="grid2">
+    <div class="card">
+      <p><b>环境</b>：Colab T4（14.5G）。<b>策略</b>：4bit QLoRA + batch=1 + 串行加载（BASE 推理完即 <code>del</code>+<code>empty_cache()</code> 再载 FT），规避 OOM。</p>
+      <p><b>时长</b>：~80 min，<b>最终 train_loss = 0.80</b>（交叉熵损失，越低代表对「正确动作序列」的拟合越好）。</p>
+    </div>
+    <div class="card">
+      <pre><span class="c"># 启动（已沉淀为脚本）</span>
+llamafactory-cli train \
+  llamafactory_runs/sft_v1/sft_config.yaml</pre>
+      <p class="mut" style="margin:0">产物：<code>adapter_model.safetensors</code>（~160MB）+ <code>adapter_config.json</code>，已备份 Drive。</p>
+    </div>
+  </div>
+
+  <h3>3.5 评估：held-out 上的 agent 动作合规率</h3>
+  <p>指标 <span class="term">agent_rate</span>：输出同时含 <code>Action:</code> 且其后 <code>ActionInput</code> 为<b>可解析 JSON</b> 的比例。判定逻辑（节选）：</p>
+  <pre><span class="k">def</span> is_agent_action(text):
+    <span class="k">if</span> <span class="k">not</span> text <span class="k">or</span> <span class="s">"Action:"</span> <span class="k">not in</span> text: <span class="k">return</span> <span class="k">False</span>
+    m = re.search(<span class="s">r"ActionInput:\s*(\{.*\})"</span>, text, re.DOTALL)
+    <span class="k">if</span> <span class="k">not</span> m: <span class="k">return</span> <span class="k">False</span>
+    <span class="k">try</span>: json.loads(m.group(<span class="n">1</span>)); <span class="k">return</span> <span class="k">True</span>   <span class="c"># JSON 可解析才算合规</span>
+    <span class="k">except</span>: <span class="k">return</span> <span class="k">False</span></pre>
+  <div class="note" style="background:#10181a;border-color:#234;color:#cfeede">
+    <b style="color:var(--acc2)">推理前提（关键）</b>：生成必须套 <code>apply_chat_template</code> 注入 DeepSeek 的 special tokens 与对话结构，再<b>截断只取新生成部分</b>（<code>out[0][in_len:]</code>），<code>max_new_tokens=768</code>、<code>do_sample=False</code>（贪心解码，保证可复现）。否则 tokenizer 缺失模板，模型退化为「回声」输入。
+  </div>
+
+  <!-- 四、结果 -->
+  <h2>四、结果：BASE 0% → FT 100%</h2>
+  <div class="grid3">
+    <div class="kpi"><div class="v bad">0%</div><div class="l">基座 agent_rate<br>（20/20 全闲聊）</div></div>
+    <div class="kpi"><div class="v good">100%</div><div class="l">微调后 agent_rate<br>（20/20 合规）</div></div>
+    <div class="kpi"><div class="v acc">+1.0</div><div class="l">增益（同分布 held-out）</div></div>
+  </div>
+  <div class="card">
+    <table>
+      <tr><th>模型</th><th>动作合规率</th><th>典型输出</th></tr>
+      <tr>
+        <td><span class="pill">BASE</span></td>
+        <td><div class="bar bad"><i style="width:0%"></i></div>0.0</td>
+        <td><code>It seems like you're looking to enhance the bulk_update()...</code>（开放域文本）</td>
+      </tr>
+      <tr>
+        <td><span class="pill">FT (QLoRA)</span></td>
+        <td><div class="bar"><i style="width:100%"></i></div>1.0</td>
+        <td><code>Action:analyze_issue ActionInput:{"instance_id":"django__django-14559","repo":"django/django"}</code></td>
+      </tr>
+    </table>
+    <p><b>解读</b>：基座在 SFT 分布下退化成「客服式闲聊」，零协议遵循；经 SFT 后，模型对 issue 的<b>条件生成分布</b>被显著改写——以高概率输出 <code>Action+JSON</code> 并正确抽取 <code>instance_id/repo</code> 槽位。这是一次典型的「格式/行为对齐」成功。</p>
+  </div>
+
+  <!-- 五、踩坑：专业归因 -->
+  <h2>五、踩坑与根因（工程判断力）</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>① 评估假象：未套 chat template</h3>
+      <p>初版直接 <code>tok(prompt)</code> 生成，缺失 special tokens 与角色标记，模型退化为<b>前缀复述（prefix echo）</b>——BASE/FT 输出与输入一致，早期 composite 指标 0.453 vs 0.446 是噪声。<b>根因</b>：tokenizer 没注入对话结构，生成条件被污染。</p>
+      <p><b>修正</b>：<code>apply_chat_template</code> + 截断新生成 + 贪心解码 → 暴露真实分布差异。</p>
+    </div>
+    <div class="card">
+      <h3>② OOM 与显存编排</h3>
+      <p>T4 14.5G 放不下两个 7B。根因：同时驻留 BASE+FT。解法是<b>串行生命周期</b>（用后即 <code>del</code>+<code>torch.cuda.empty_cache()</code>），并用 4bit + gradient checkpointing 用算力换显存。</p>
+    </div>
+    <div class="card">
+      <h3>③ 权重丢失→重训</h3>
+      <p>首训只备份测试集，权重随会话销毁。沉淀为「训完即 <code>copytree</code> 到 Drive」流程，保证可复现。</p>
+    </div>
+    <div class="card">
+      <h3>④ 4bit 是 T4 的硬约束</h3>
+      <p>缺 <code>quantization_bit:4</code> 时 7B fp16 直接 OOM（曾因残留进程占 3.93G 触发）。QLoRA 是免费卡的必选项，非可选项。</p>
+    </div>
+  </div>
+
+  <!-- 六、局限 -->
+  <h2>六、诚实的边界（面试加分项）</h2>
+  <div class="note">
+    <b>定位</b>：这是一次<b>协议对齐（behavior alignment）</b> Proof-of-Concept，而非「模型能端到端修 bug」的结论。
+    <ul>
+      <li><b>评估粒度</b>：仅在 20 条 held-out 上测「首动作格式合规」，属<b>同分布格式对齐</b>，未测多轮规划质量。</li>
+      <li><b>未跑 resolve</b>：要得官方 <code>resolved_rate</code>，需接入 Agent 图（checkout 仓库→apply→跑 FAIL_TO_PASS）。项目预留 <code>live</code> 评估接口，Colab 上未执行。</li>
+      <li><b>样本量</b>：235 训练 / 20 测试偏小，r=16 在小数据上仍有过拟合风险（靠 dropout+早停缓解）。扩大测试到 50–100 条更稳。</li>
+      <li><b>真实价值</b>：证明<b>极低成本（免费 GPU + QLoRA）即可把通用代码模型教会 Agent 行为模式</b>，是一条可复现、可扩展（换基座/加 DPO/GRPO）的路径。</li>
+    </ul>
+  </div>
+
+  <!-- 七、简历 -->
+  <h2>七、可写进简历的表述</h2>
+  <div class="resume">
+    <h4>项目：基于 QLoRA 的代码大模型 SFT —— SWE Agent 协议对齐</h4>
+    <ul>
+      <li>基于 DeepSeek-Coder-7B-Instruct，用 <b>QLoRA（4bit NF4 + LoRA rank16/alpha32/dropout0.05）</b>在 235 条 SWE-bench 成功轨迹（ShareGPT）上做 SFT（3 epoch / ~80min / train_loss 0.80），沉淀可复现训练与权重备份流程。</li>
+      <li>设计 <b>agent 动作合规率</b>指标（输出 <code>Action+JSON</code> 且字段可解析）：基座 0% 输出结构化工具调用，微调后达 <b>100%</b>（20/20 正确抽取 instance_id/repo），验证 SFT 将「开放域 LLM」对齐为「遵循 ReAct 协议的 Agent 基座」。</li>
+      <li>工程落地：4bit 量化 + 串行显存编排规避 Colab T4（14.5G）OOM；修正推理链路（chat template + 生成截断 + 贪心解码）确保评估结论可信，沉淀可复用评估脚本与 YAML。</li>
+    </ul>
+  </div>
+
+  <footer>
+    指标与流程均已在 Colab 复现验证（2026-08-25）· 训练/评估代码见 <code>llamafactory_runs/sft_v1/</code>、<code>scripts/eval_swebench.py</code> 与 <code>docs/EVAL_AND_RESUME_PLAN.md</code>。
+  </footer>
+
+</div>
+</body>
+</html>

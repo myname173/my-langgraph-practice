@@ -18,7 +18,8 @@ from pathlib import Path
 import os as _os
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "output" / "reference_sheets" / "library" / "manifest.json"
-LG_BASE = "http://localhost:2024"
+# 端口可用 LG_PORT 覆盖（默认 2024，与 `langgraph dev` 默认端口一致）。
+LG_BASE = "http://localhost:%s" % _os.environ.get("LG_PORT", "2024")
 MEDIA_BASE = "http://localhost:8900"
 # 与前端 frontend/src/lib/langgraphClient.ts 的 ASSISTANT_ID 完全一致，
 # 即“前端有的接口”实际调用的就是这个 agent 图（langgraph.json 仅注册了 agent）。

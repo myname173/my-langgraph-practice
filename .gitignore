@@ -245,3 +245,12 @@ workspace/inspect_ckpt_fields.py
 workspace/list_channels.py
 workspace/read_scenes_head.py
 workspace/verify_state.py
+
+# ── 运行产物：抽帧 / 帧审计图（大体积 PNG，可重生）──
+workspace/_frames/
+workspace/_frames_audit/
+workspace/_frames_new/
+
+# ── 临时启动器与运行时 pid（本地调试产物）──
+workspace/_lg_*.cmd
+.lg_pid

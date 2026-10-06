@@ -311,6 +311,22 @@ def _build_narrative_arc(scenes: List[Dict], template_key: str | None = None) ->
 
 
 # ================= 节点定义 =================
+def _extract_scene_assets(raw) -> list:
+    """归一化总导演输出的 scene["assets"]：仅保留非空字符串并去重。
+
+    总导演在分镜阶段标注「本镜实际出场的角色/道具/环境名」，作为下游素材参考图
+    匹配的结构化信号，替代「资产名恰好字面出现在 script 里」的脆弱匹配。
+    """
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for x in raw:
+        _x = str(x).strip() if x is not None else ""
+        if _x and _x not in out:
+            out.append(_x)
+    return out
+
+
 def showrunner_node(state: MultimediaState, config: RunnableConfig | None = None):
     print("\n--- 👑[节点1: 总导演] 正在拆解长视频分镜剧本 ---")
 
@@ -458,6 +474,9 @@ def showrunner_node(state: MultimediaState, config: RunnableConfig | None = None
         scene_item["beat"] = s.get("beat", "")
         scene_item["transition_in"] = s.get("transition_in", "")
         scene_item["dialogue"] = (s.get("dialogue") or "").strip()
+        # ── 结构化资产提示：总导演标注的本镜出场角色/道具/环境名，
+        #    供下游资产匹配直读，替代「把名字塞进 script 里碰字面」的脆弱匹配。
+        scene_item["assets"] = _extract_scene_assets(s.get("assets"))
         # ── 分镜时长：优先采用 LLM 显式给出的 duration_seconds，否则按台词长度估算 ──
         scene_item["duration_seconds"] = _estimate_scene_duration(
             scene_item["dialogue"], s.get("duration_seconds")

@@ -238,49 +238,122 @@ def _all_asset_names(reference_sheets: dict) -> list:
     return names
 
 
+def _desc_tokens(desc: str):
+    """把资产描述切成可匹配 token：中文按字符 2-gram、英文/数字按词。
+
+    修复原实现 `desc.replace("_", " ").split()` 对中文（无空格）切出整段超长 token、
+    导致「整段 in script」几乎永不命中的缺陷——该分支本意正是为了避免「所有镜头因
+    匹配失败而回退到同一张肖像、造成首帧雷同」，但原实现未生效。
+    """
+    desc = str(desc or "").lower()
+    cjk_tokens, word_tokens = [], []
+    cjk = ""
+    for ch in desc:
+        if "\u4e00" <= ch <= "\u9fff":
+            cjk += ch
+            continue
+        if len(cjk) >= 2:
+            cjk_tokens.extend(cjk[i:i + 2] for i in range(len(cjk) - 1))
+        cjk = ""
+    if len(cjk) >= 2:
+        cjk_tokens.extend(cjk[i:i + 2] for i in range(len(cjk) - 1))
+    word_tokens = [w for w in desc.replace("_", " ").split() if len(w) > 1 and w.isascii()]
+    return cjk_tokens, word_tokens
+
+
+def _check_match(name: str, data: dict, script_text: str, hint_names=None) -> bool:
+    """通用资产名匹配：结构化提示 > name_cn/name 字面 > 单词级 > 描述反向。
+
+    - hint_names：分镜生成阶段输出的本镜出场资产名（scene["assets"]），为最高置信度
+      信号；与素材键名 / name_cn 相等或一方包含即命中，避免只靠「资产名恰好字面出现
+      在 script 里」的脆弱匹配。
+    - 描述反向匹配：英文词任一命中（保持原行为）；中文 2-gram 需 >=2 命中，在修复中文
+      整段无法匹配的同时，抑制单个通用词造成的误判。
+    """
+    data = data if isinstance(data, dict) else {}
+    name_cn = data.get("name_cn", "")
+    names = [n for n in [name, name_cn] if n]
+
+    # 1) 结构化资产提示（最高置信度）
+    if hint_names:
+        _hints = [str(x).strip().lower() for x in hint_names if str(x).strip()]
+        for _n in names:
+            _nl = str(_n).strip().lower()
+            if _nl and any(_h == _nl or _h in _nl or _nl in _h for _h in _hints):
+                return True
+
+    # 2) 名称整串 / 单词级字面命中
+    if any(n.lower() in script_text for n in names):
+        return True
+    if any(
+        word in script_text
+        for n in names
+        for word in n.lower().replace("_", " ").split()
+        if len(word) > 1
+    ):
+        return True
+
+    # 3) 描述反向匹配
+    desc = (data.get("description") or "").lower()
+    if desc:
+        _cn, _en = _desc_tokens(desc)
+        if any(w in script_text for w in _en):
+            return True
+        if sum(1 for t in set(_cn) if t in script_text) >= 2:
+            return True
+    return False
+
+
+def _scene_asset_hints(scenes) -> list:
+    """收集全部镜头 scene["assets"] 的结构化资产提示（去重、去空）。"""
+    hints = []
+    for s in (scenes or []):
+        _a = s.get("assets") if isinstance(s, dict) else None
+        if isinstance(_a, list):
+            for x in _a:
+                _x = str(x).strip() if x is not None else ""
+                if _x and _x not in hints:
+                    hints.append(_x)
+    return hints
+
+
 def _build_asset_match_baseline(reference_sheets: dict, scenes: list) -> dict:
     """预扫描全剧本，建立素材匹配基线。
 
     返回 {"matched": {name: 0}, "unmatched": [name,...]}：
     - matched[name]=0 表示该资产名在剧本中至少出现一次（后续 image_gen_node 累加命中镜头数）；
     - unmatched 为在全部镜头脚本中都搜不到的资产名（即极可能「静默失效」）。
-    这样前端无需知道剧本内容，也能提示用户「这张图没被用到」。
+
+    匹配同时纳入镜头结构化提示 scene["assets"]（总导演标注的出场资产名），使前端
+    「哪些素材从未被用到」的预警与真实命中一致。
     """
+    scenes = scenes or []
     scripts = " ".join(
-        str(s.get("script", "") or "") for s in (scenes or [])
+        str(s.get("script", "") or "") for s in scenes
     ).lower()
+    hints = _scene_asset_hints(scenes)
     matched, unmatched = {}, []
     for name in _all_asset_names(reference_sheets):
-        # 复用通用匹配（name_cn + 单词级 fallback）
         data = None
         for cat in ("characters", "props", "environments"):
             data = (reference_sheets.get(cat) or {}).get(name)
             if data is not None:
                 break
-        hit = False
-        name_cn = data.get("name_cn", "") if isinstance(data, dict) else ""
-        names = [n for n in [name, name_cn] if n]
-        if any(n.lower() in scripts for n in names):
-            hit = True
-        else:
-            hit = any(
-                word in scripts
-                for n in names
-                for word in n.lower().replace("_", " ").split()
-                if len(word) > 1
-            )
-        if hit:
+        if _check_match(name, data if isinstance(data, dict) else {}, scripts, hints):
             matched[name] = 0
         else:
             unmatched.append(name)
     return {"matched": matched, "unmatched": unmatched}
 
 
-def _match_reference_elements(reference_sheets: dict, script_text: str) -> dict:
+def _match_reference_elements(reference_sheets: dict, script_text: str, assets_hint=None) -> dict:
     """匹配 reference sheets 中与当前剧本相关的角色/道具/环境。
 
     一个角色/环境资产可挂多张参考图，匹配命中后返回 **全部 url 列表**，
     供 image_gen_node 多参考图融合注入，强化角色/场景一致性（对齐 Vidu）。
+
+    assets_hint：本镜结构化资产提示（scene["assets"]），来自分镜生成阶段的总导演
+    输出——作为最高置信度匹配信号，优先于 script 字面匹配。
 
     Returns:
         {
@@ -294,41 +367,13 @@ def _match_reference_elements(reference_sheets: dict, script_text: str) -> dict:
     """
     result = {"char_urls": None, "char_desc": "", "prop_desc": "",
               "env_urls": None, "matched_char_name": "", "matched_prop_name": ""}
-
-    def _check_match(name: str, data: dict) -> bool:
-        """通用名称匹配：支持 name_cn + name + 单词级 fallback。
-
-        额外增加 description 反向匹配：当用户上传素材以英文名（如 char_main）
-        命名、而剧本 script 使用中文角色名时，name 无法命中，此时用素材
-        description 中的中文特征词反向到 script 查找，避免所有镜头因匹配
-        失败而回退到同一张 character_portrait_url，造成首帧雷同。
-        """
-        data = data if isinstance(data, dict) else {}
-        name_cn = data.get("name_cn", "")
-        names = [n for n in [name, name_cn] if n]
-        if any(n.lower() in script_text for n in names):
-            return True
-        if any(
-            word in script_text
-            for n in names
-            for word in n.lower().replace("_", " ").split()
-            if len(word) > 1
-        ):
-            return True
-        # description 反向匹配：素材描述里的特征词出现在剧本中
-        desc = (data.get("description") or "").lower()
-        if desc:
-            # 取描述中的中文/实义词（长度>1）尝试命中剧本
-            for _tok in desc.replace("_", " ").split():
-                if len(_tok) > 1 and _tok in script_text:
-                    return True
-        return False
+    hint_names = [str(x).strip() for x in (assets_hint or []) if str(x).strip()]
 
     # 角色匹配（支持多角色同时命中：合并所有命中角色的 url，供多参考图融合）
     _matched_char_urls = []
     _matched_char_desc = []
     for char_name, char_data in reference_sheets.get("characters", {}).items():
-        if _check_match(char_name, char_data):
+        if _check_match(char_name, char_data, script_text, hint_names):
             _raw = char_data.get("urls") if isinstance(char_data, dict) else None
             if _raw is None and isinstance(char_data, dict):
                 _raw = char_data.get("url")
@@ -344,14 +389,14 @@ def _match_reference_elements(reference_sheets: dict, script_text: str) -> dict:
 
     # 道具匹配
     for prop_name, prop_data in reference_sheets.get("props", {}).items():
-        if _check_match(prop_name, prop_data):
+        if _check_match(prop_name, prop_data, script_text, hint_names):
             result["prop_desc"] = prop_data.get("description", "") if isinstance(prop_data, dict) else ""
             result["matched_prop_name"] = prop_name
             break
 
     # 环境匹配
     for env_name, env_data in reference_sheets.get("environments", {}).items():
-        if _check_match(env_name, env_data):
+        if _check_match(env_name, env_data, script_text, hint_names):
             _raw = env_data.get("urls") if isinstance(env_data, dict) else None
             if _raw is None and isinstance(env_data, dict):
                 _raw = env_data.get("url")

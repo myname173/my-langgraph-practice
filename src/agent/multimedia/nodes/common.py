@@ -280,6 +280,7 @@ def _scene_base(script: str) -> Dict[str, Any]:
     return {
         "script": script,
         "dialogue": "",               # 适合配音的中文角色台词/旁白（与 script 视觉描述解耦）
+        "assets": [],                 # 本镜实际出场资产名（总导演结构化输出，供资产匹配直读；空=未标注）
         # ── 情节密度字段（Phase 0 总导演结构化输出，用于强化首尾帧可见内容）──
         "scale": "",                 # 景别
         "camera_note": "",           # 镜头运动与角度

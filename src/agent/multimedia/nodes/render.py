@@ -89,7 +89,7 @@ def image_gen_node(state: MultimediaState):
             # 方案 B：img2img 生成镜头专属首/尾帧
             reference_sheets = state.get("reference_sheets") or {}
             script_text = scene.get("script", "").lower()
-            ref_match = _match_reference_elements(reference_sheets, script_text)
+            ref_match = _match_reference_elements(reference_sheets, script_text, assets_hint=scene.get("assets"))
             # 构建「按角色名 → 专属肖像」映射：每个角色固定一张非 turnaround 立绘，
             # 保证同一角色在任意镜头都锚定到同一张脸（修复"每镜脸不同"的核心 bug）。
             _character_portraits = {}
@@ -247,7 +247,7 @@ def image_gen_node(state: MultimediaState):
     character_portrait_url = state.get("character_portrait_url")
 
     # ── 使用 helper 匹配当前场景涉及的角色/道具/环境 ──
-    ref_match = _match_reference_elements(reference_sheets, script_text)
+    ref_match = _match_reference_elements(reference_sheets, script_text, assets_hint=scene.get("assets"))
     matched_char_urls = ref_match["char_urls"]
     matched_char_desc = ref_match["char_desc"]
     matched_prop_desc = ref_match["prop_desc"]
@@ -626,7 +626,7 @@ def end_frame_gen_node(state: MultimediaState):
     end_frame_prompt = scene["last_image_prompt"]
     reference_sheets = state.get("reference_sheets") or {}
     script_text = scene.get("script", "").lower()
-    ref_match = _match_reference_elements(reference_sheets, script_text)
+    ref_match = _match_reference_elements(reference_sheets, script_text, assets_hint=scene.get("assets"))
     end_frame_anchors = []
     if ref_match["char_desc"]:
         end_frame_anchors.append(f"[Character Identity Anchor: {ref_match['char_desc']}]")
@@ -877,7 +877,7 @@ def video_gen_node(state: MultimediaState, config: RunnableConfig | None = None)
                 str(scene.get("script") or ""),
                 str(scene.get("dialogue") or ""),
             ]).lower()
-            _matched = _match_reference_elements(_sheets, _script_text)
+            _matched = _match_reference_elements(_sheets, _script_text, assets_hint=scene.get("assets"))
             _char_urls = _matched.get("char_urls") or []
             _char_desc = _matched.get("char_desc") or ""
             _prop_desc = _matched.get("prop_desc") or ""

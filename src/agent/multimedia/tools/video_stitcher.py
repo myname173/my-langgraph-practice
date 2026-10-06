@@ -118,6 +118,47 @@ _DEFAULT_TRANSITION_DURATION = 0.4
 # whip_pan 专用更短时长
 _WHIP_PAN_DURATION = 0.25
 
+# ── P2：接缝平滑层 ──────────────────────────────────────────────
+# 转场“生效集合”：不在此集合内的转场会被当作硬切。注意 match_cut 语义为
+# “视觉韵律/连续性”，历史上因不在集合内被静默降级为硬切（计划 match_cut →
+# 实际硬切），是“分镜不连贯”的直接成因之一。这里纳入，使其真正生效。
+_EFFECT_TRANSITIONS = {"dissolve", "fade_through_black", "whip_pan", "smash_cut", "camera_carry", "match_cut"}
+# 真正“无混合”的硬切类转场（接缝平滑层的处理对象）；smash_cut 属刻意突兀，保留不动。
+_HARD_SEAM_TYPES = {"hard_cut"}
+
+_SEAM_SMOOTH_ENV = "MULTIMEDIA_SEAM_SMOOTH"      # off | dissolve(默认) | freeze
+_SEAM_DURATION_ENV = "MULTIMEDIA_SEAM_DURATION"  # 溶解时长（秒），默认 0.4（约 10 帧 @24fps）
+_SEAM_FREEZE_ENV = "MULTIMEDIA_SEAM_FREEZE"      # 末帧冻结时长（秒），默认 0.2
+
+
+def seam_smooth_mode() -> str:
+    """接缝平滑模式：off / dissolve（默认）/ freeze。非法值回退 dissolve。"""
+    m = (os.getenv(_SEAM_SMOOTH_ENV, "dissolve") or "dissolve").strip().lower()
+    return m if m in ("off", "dissolve", "freeze") else "dissolve"
+
+
+def seam_smooth_duration() -> float:
+    """接缝溶解时长（秒），限制在 [0.08, 0.6]。"""
+    try:
+        d = float(os.getenv(_SEAM_DURATION_ENV, "0.4") or "0.4")
+    except ValueError:
+        d = 0.4
+    return max(0.08, min(0.6, d))
+
+
+def seam_freeze_seconds() -> float:
+    """接缝末帧冻结时长（秒），限制在 [0.0, 0.5]。"""
+    try:
+        d = float(os.getenv(_SEAM_FREEZE_ENV, "0.2") or "0.2")
+    except ValueError:
+        d = 0.2
+    return max(0.0, min(0.5, d))
+
+
+def _seam_is_hard(t: str) -> bool:
+    """该转场是否为“无混合”的硬切类（接缝平滑的处理对象）。"""
+    return (not t) or (t in _HARD_SEAM_TYPES)
+
 
 # ==============================
 # 下载模块（带重试）
@@ -331,6 +372,9 @@ def _apply_transition_effects(
         elif transition_in == "camera_carry":
             # camera_carry 使用比 dissolve 更长的交叉淡化
             clip = _safe_crossfadein(clip, duration * 1.5)
+        elif transition_in == "match_cut":
+            # P2：match_cut = 视觉韵律/连续性 → 短交叉淡化（不再静默降级为硬切）
+            clip = _safe_crossfadein(clip, duration)
         # smash_cut 入向不需要淡入（保持硬切的突兀感）
 
     if fade_out and transition_out in _TRANSITION_TYPES:
@@ -347,7 +391,87 @@ def _apply_transition_effects(
         elif transition_out == "camera_carry":
             clip = _safe_crossfadeout(clip, duration * 1.5)
 
+        elif transition_out == "match_cut":
+            # P2：match_cut 出向同样做短交叉淡化
+            clip = _safe_crossfadeout(clip, duration)
+
     return clip
+
+
+def _freeze_tail(clip, seconds: float):
+    """把片段最后一帧冻结 ``seconds`` 秒追加到尾部（接缝“停顿”）；失败返回原片段。"""
+    try:
+        sec = float(seconds or 0.0)
+        if sec <= 0 or float(getattr(clip, "duration", 0.0) or 0.0) <= 0:
+            return clip
+        last = clip.get_frame(max(0.0, float(clip.duration) - 0.05))
+        try:
+            from moviepy import ImageClip
+        except ImportError:
+            from moviepy.editor import ImageClip
+        tail = ImageClip(last).with_duration(sec)
+        return concatenate_videoclips([clip, tail], method="compose")
+    except Exception as e:
+        print(f"    [WARN] 接缝末帧冻结失败，保留原片段: {e}")
+        return clip
+
+
+def _apply_seam_smoothing(clips: list, transitions: list):
+    """P2 接缝平滑层：让“硬切类”接缝产生短混合，吸收镜头间残余跳变。
+
+    模式（env MULTIMEDIA_SEAM_SMOOTH）：
+      - off     : 关闭。硬切保持硬切（match_cut 的真溶解修复仍生效）。
+      - dissolve: 默认。把 hard_cut 接缝改写为短溶解。
+      - freeze  : 把 hard_cut 接缝改为“出镜末帧冻结”停顿。
+
+    返回 (clips, transitions, changed)；changed 表示是否实际改写了接缝。
+    任何异常都优雅降级为原样返回，绝不阻断拼接。
+    """
+    try:
+        mode = seam_smooth_mode()
+        if mode == "off" or not clips:
+            return clips, transitions, False
+
+        dur = seam_smooth_duration()
+        frz = seam_freeze_seconds()
+        n = len(clips)
+        new_trans = list(transitions or [])
+        while len(new_trans) < max(0, n - 1):
+            new_trans.append("hard_cut")
+
+        if mode == "freeze":
+            out = []
+            applied = 0
+            for i, c in enumerate(clips):
+                seam = new_trans[i] if i < n - 1 else ""
+                if i < n - 1 and _seam_is_hard(seam):
+                    out.append(_freeze_tail(c, frz))
+                    applied += 1
+                else:
+                    out.append(c)
+            if applied:
+                print(f"    [P2] 接缝末帧冻结 {applied} 处（每处 {frz:.2f}s）")
+            return out, new_trans, applied > 0
+
+        # dissolve：把 hard_cut 接缝改写为短溶解（时长保护：相邻片段过短则跳过）
+        changed = 0
+        for i in range(n - 1):
+            if not _seam_is_hard(new_trans[i]):
+                continue
+            try:
+                shorter = min(float(clips[i].duration or 0.0), float(clips[i + 1].duration or 0.0))
+            except Exception:
+                shorter = 99.0
+            if shorter < 2 * dur:
+                continue
+            new_trans[i] = "dissolve"
+            changed += 1
+        if changed:
+            print(f"    [P2] 接缝平滑：{changed} 处硬切 → 短溶解 {dur:.2f}s")
+        return clips, new_trans, changed > 0
+    except Exception as e:
+        print(f"    [WARN] 接缝平滑层异常，降级为原样: {e}")
+        return clips, transitions, False
 
 
 def _build_with_transitions(
@@ -379,7 +503,7 @@ def _build_with_transitions(
                 t += clips[i].duration - _WHIP_PAN_DURATION
             elif trans == "camera_carry":
                 t += clips[i].duration - transition_duration * 1.5
-            elif trans in ("dissolve", "fade_through_black"):
+            elif trans in ("dissolve", "fade_through_black", "match_cut"):
                 t += clips[i].duration - transition_duration
             else:
                 # hard_cut, smash_cut: no overlap
@@ -392,8 +516,8 @@ def _build_with_transitions(
         trans_out = transitions[i] if i < len(transitions) else ""
 
         # 判断是否需要入/出效果
-        _FADE_IN_TRANSITIONS = {"dissolve", "fade_through_black", "whip_pan", "camera_carry"}
-        _FADE_OUT_TRANSITIONS = {"dissolve", "fade_through_black", "whip_pan", "smash_cut", "camera_carry"}
+        _FADE_IN_TRANSITIONS = {"dissolve", "fade_through_black", "whip_pan", "camera_carry", "match_cut"}
+        _FADE_OUT_TRANSITIONS = {"dissolve", "fade_through_black", "whip_pan", "smash_cut", "camera_carry", "match_cut"}
         needs_fade_in = trans_in in _FADE_IN_TRANSITIONS
         needs_fade_out = trans_out in _FADE_OUT_TRANSITIONS
 
@@ -493,7 +617,7 @@ def _compute_segment_starts(
             t += dur - _WHIP_PAN_DURATION
         elif trans == "camera_carry":
             t += dur - transition_duration * 1.5
-        elif trans in ("dissolve", "fade_through_black"):
+        elif trans in ("dissolve", "fade_through_black", "match_cut"):
             t += dur - transition_duration
         else:
             # hard_cut / smash_cut: 无重叠
@@ -527,7 +651,7 @@ def stitch_videos(
         output_filename = _generate_filename()
 
     print(f"\n--- [Editor] Starting video stitching -> {output_filename} ---")
-    _EFFECT_TRANSITIONS = {"dissolve", "fade_through_black", "whip_pan", "smash_cut", "camera_carry"}
+    # P2：转场生效集合统一到模块级 _EFFECT_TRANSITIONS（含 match_cut）。
     if transitions:
         effect_trans = [t for t in transitions if t in _EFFECT_TRANSITIONS]
         if effect_trans:
@@ -631,6 +755,7 @@ def stitch_videos(
         if len(clips) == 0:
             raise Exception("没有可用的视频片段，无法生成最终视频")
 
+        _eff_dur = transition_duration
         if len(clips) == 1:
             print("    [WARN] 仅有一个片段，直接导出")
             final_clip = clips[0]
@@ -644,6 +769,13 @@ def stitch_videos(
                         clip_transitions.append(transitions[orig_idx])
                     else:
                         clip_transitions.append("hard_cut")
+            else:
+                clip_transitions = ["hard_cut"] * max(0, len(clips) - 1)
+
+            # ── P2：接缝平滑层（吸收镜头间残余跳变）──
+            clips, clip_transitions, _p2_changed = _apply_seam_smoothing(clips, clip_transitions)
+            if _p2_changed:
+                _eff_dur = seam_smooth_duration()
 
             has_transitions = any(
                 t in _EFFECT_TRANSITIONS for t in clip_transitions
@@ -652,7 +784,7 @@ def stitch_videos(
             if has_transitions:
                 print(f"    [剪辑] 带转场拼接 {len(clips)} 个片段...")
                 final_clip = _build_with_transitions(
-                    clips, clip_transitions, transition_duration
+                    clips, clip_transitions, _eff_dur
                 )
             else:
                 print(f"    [剪辑] 硬切拼接 {len(clips)} 个片段...")
@@ -703,7 +835,7 @@ def stitch_videos(
         # 成片总长 = Σ片段时长 − Σ转场重叠，若字幕仍用「时长累加」排布，
         # 越靠后的字幕前移偏差越大、末条会超出片尾。有了真实 start 即可精确对齐。
         segment_starts = _compute_segment_starts(
-            clips, clip_transitions if len(clips) > 1 else [], transition_duration
+            clips, clip_transitions if len(clips) > 1 else [], _eff_dur
         )
         return abs_path, valid_indices, segment_durations, segment_starts
 

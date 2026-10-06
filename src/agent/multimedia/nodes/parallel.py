@@ -14,6 +14,7 @@ from ..state import MultimediaState, ShotState
 from .director import director_node, director_refine_node, end_frame_director_node, end_frame_prompt_preview_node, prompt_preview_node, videographer_node
 from .render import end_frame_gen_node, end_frame_review_gate_node, image_gen_node, image_review_gate_node, reviewer_node, video_gen_node, video_review_gate_node, video_reviewer_node
 from .routing import decide_after_critic, decide_after_end_frame_generation, decide_after_image_generation, decide_after_video_generation, decide_end_frame_quality, decide_image_quality, decide_video_quality
+from ..tools.frame_extract import extract_last_frame, relay_mode
 
 
 # ================= 组装 Graph =================
@@ -425,6 +426,23 @@ def _chain_all_locked(chain: List[int], scenes: List[Dict[str, Any]], locked: se
     return True
 
 
+def _relay_frame_from_scene(scene: Dict[str, Any], thread_id: str, pos) -> Optional[str]:
+    """解析「承接帧」：默认真实末帧接力（从上一镜成片视频抽物理末帧），
+    抽取失败或 ``MULTIMEDIA_FLF_RELAY=keyframe`` 时回退计划尾帧图。"""
+    scene = scene or {}
+    keyframe = scene.get("last_image_url") or scene.get("image_url")
+    if relay_mode() != "video":
+        return keyframe
+    vid = scene.get("final_video_url") or scene.get("raw_video_url")
+    if vid:
+        frame = extract_last_frame(vid, thread_id=thread_id, tag=f"shot{int(pos) + 1}")
+        if frame:
+            print(f"    [P0-relay] 镜头 {int(pos) + 1} 真实末帧接力 → {frame}")
+            return frame
+        print(f"    [P0-relay] 镜头 {int(pos) + 1} 真实末帧抽取失败，回退计划尾帧图")
+    return keyframe
+
+
 def _run_chain_node(chain: Dict[str, Any], config: RunnableConfig | None = None):
     """父图节点：一条链内逐镜串行（前镜尾帧 → 后镜首帧），链间由 Send 并发。
 
@@ -451,6 +469,7 @@ def _run_chain_node(chain: Dict[str, Any], config: RunnableConfig | None = None)
     agg_reviewer_unavailable = False
     agg_error = None
     prev_last_frame = chain.get("seed_last_frame")
+    _tid = str(ctx.get("thread_id") or "")
 
     for pos, i in enumerate(shot_indices):
         scene_snapshot = (
@@ -459,7 +478,7 @@ def _run_chain_node(chain: Dict[str, Any], config: RunnableConfig | None = None)
 
         # 锁定且已有成片的镜头：跳过生成，仅以其快照图承接链内连续性。
         if i in locked and str(scene_snapshot.get("final_video_url") or "").strip():
-            _seed = scene_snapshot.get("last_image_url") or scene_snapshot.get("image_url")
+            _seed = _relay_frame_from_scene(scene_snapshot, _tid, i)
             if _seed:
                 prev_last_frame = _seed
             flags[str(i)] = {
@@ -506,7 +525,7 @@ def _run_chain_node(chain: Dict[str, Any], config: RunnableConfig | None = None)
             agg_error = final.get("error_log")
 
         out_scene = sr.get(str(i)) or {}
-        nxt = out_scene.get("last_image_url") or out_scene.get("image_url")
+        nxt = _relay_frame_from_scene(out_scene, _tid, i)
         if nxt:
             prev_last_frame = nxt
 

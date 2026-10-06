@@ -163,6 +163,7 @@ from .nodes.parallel import (
     _fan_out_shots,
     _flf_chain_plan,
     _parallel_shots_enabled,
+    _relay_frame_from_scene,
     _run_chain_node,
     _run_shot_chain_node,
     _shot_collect,
@@ -255,6 +256,7 @@ __all__ = [
     "_normalize_fix_type",
     "_normalize_scenes",
     "_parallel_shots_enabled",
+    "_relay_frame_from_scene",
     "_resolve_style",
     "_run_chain_node",
     "_run_shot_chain_node",
@@ -526,6 +528,8 @@ _REF_SUBS = {
     "_normalize_scenes": ("common", "scripting"),
 
     "_parallel_shots_enabled": ("parallel",),
+
+    "_relay_frame_from_scene": ("parallel",),
 
     "_persist_studio_output": ("director",),
 

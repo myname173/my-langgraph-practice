@@ -5,6 +5,8 @@ import numpy as np
 from dotenv import load_dotenv
 import requests
 
+from .media_paths import media_url_to_local
+
 load_dotenv()
 
 _session = requests.Session()
@@ -46,11 +48,15 @@ def _to_dashscope_image(src: str) -> str:
     # 本地绝对路径 或 项目自定义 /media/<rel> 前缀 -> 读本地文件转 base64
     _path = src
     if src.startswith("/media/"):
-        # /media/<rel> -> <PROJECT_ROOT>/output/<rel>
-        _rel = src[len("/media/"):]
-        # embedding.py -> tools -> multimedia -> agent -> src -> <root>  (5 层)
-        _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-        _path = os.path.join(_root, "output", _rel)
+        # /media/<rel> -> 本地文件（兼容 output-relative 与 root-relative 两种约定）
+        _lp = media_url_to_local(src)
+        if _lp is not None:
+            _path = str(_lp)
+        else:
+            _rel = src[len("/media/"):]
+            # embedding.py -> tools -> multimedia -> agent -> src -> <root>  (5 层)
+            _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+            _path = os.path.join(_root, "output", _rel)
     if os.path.isfile(_path):
         import base64 as _b64
         try:

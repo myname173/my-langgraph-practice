@@ -25,6 +25,8 @@ import os
 import io
 import math
 import base64
+
+from .media_paths import media_url_to_local
 import threading
 import urllib.request
 from pathlib import Path
@@ -123,7 +125,8 @@ def _load_rgb(image_input: str):
         with urllib.request.urlopen(s, timeout=30) as resp:
             img = Image.open(io.BytesIO(resp.read()))
     else:
-        img = Image.open(s)
+        _lp = media_url_to_local(s) if s.startswith("/media/") else None
+        img = Image.open(str(_lp) if _lp is not None else s)
     with img:
         return np.asarray(img.convert("RGB"))
 

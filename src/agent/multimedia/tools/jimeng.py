@@ -28,6 +28,8 @@
 from __future__ import annotations
 
 import base64
+
+from .media_paths import media_url_to_local
 import itertools
 import os
 import re
@@ -557,7 +559,8 @@ def _as_inline(url_or_path: str) -> str:
             # 这样 jimeng 关键帧/尾帧不依赖媒体服务器存活，离线锚定素材图。
             if _host in ("localhost", "127.0.0.1") and "/media/" in url_or_path:
                 _media_rel = url_or_path.partition("/media/")[2]
-                _local = str(PROJECT_ROOT / "output" / _media_rel)
+                _lp = media_url_to_local("/media/" + _media_rel)
+                _local = str(_lp) if _lp else str(PROJECT_ROOT / "output" / _media_rel)
                 try:
                     _b = open(_local, "rb").read()
                     _mime = mimetypes.guess_type(_local)[0] or "image/png"
@@ -569,11 +572,12 @@ def _as_inline(url_or_path: str) -> str:
                     print(f"    [WARN] 即梦 localhost 媒体宕机，本地还原 /media/{_media_rel} 也失败: {_e2}")
             print(f"    [WARN] 即梦远程参考图下载失败({_host})，回退原值: {_e}")
             return url_or_path
-    # 还原 /media/<rel> -> PROJECT_ROOT/output/<rel>
+    # 还原 /media/<rel> -> 本地文件（兼容 output-relative 与 root-relative 两种约定）
     candidate = url_or_path
     if url_or_path.startswith("/media/"):
         rel = url_or_path[len("/media/"):]
-        candidate = str(PROJECT_ROOT / "output" / rel)
+        _lp = media_url_to_local(url_or_path)
+        candidate = str(_lp) if _lp else str(PROJECT_ROOT / "output" / rel)
     try:
         import mimetypes
         mime = mimetypes.guess_type(candidate)[0] or "image/png"

@@ -2,6 +2,8 @@
 import os
 import json
 import base64
+
+from .media_paths import media_url_to_local
 import tempfile
 from io import BytesIO
 from typing import Optional, List, Dict, Any
@@ -68,6 +70,12 @@ def _resolve_image_input(u: str, max_size: int = 768, quality: int = 88) -> str:
     s = str(u)
     if s.startswith(("http://", "https://", "data:")):
         return s
+    # 项目自定义 /media/<rel> 前缀：兼容 output-relative 与 root-relative 两种约定，
+    # 先还原为本地文件（否则视觉模型无法解析该 URL，报 400 code 1210「图片输入格式/解析错误」）。
+    if s.startswith("/media/"):
+        _lp = media_url_to_local(s)
+        if _lp is not None:
+            s = str(_lp)
     try:
         if os.path.isfile(s):
             with Image.open(s) as im:

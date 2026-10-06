@@ -97,7 +97,14 @@ def _generate_voiceover_dashscope(text: str, voice: str, out_path: str) -> str:
     )
     audio = result.get_audio_data()
     if audio is None:
-        raise RuntimeError(f"CosyVoice 合成失败: {result.message}")
+        # SpeechSynthesizerResult 上并没有 .message（那是别的 SDK 的结构）；直接访问该
+        # 属性会抛 AttributeError，把真正的合成失败原因（如 API Key 无效）完全掩盖。
+        # 这里防御式提取状态信息，保证报错可读。
+        _code = getattr(result, "status_code", None) or getattr(result, "code", None)
+        _msg = getattr(result, "message", None) or getattr(result, "msg", None)
+        if _code is None and _msg is None:
+            _msg = f"{type(result).__name__} 未返回音频数据"
+        raise RuntimeError(f"CosyVoice 合成失败: code={_code}, message={_msg}")
     with open(out_path, "wb") as f:
         f.write(audio)
     return out_path

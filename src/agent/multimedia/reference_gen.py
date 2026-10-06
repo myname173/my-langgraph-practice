@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 from .prompts import REFERENCE_EXTRACTION_PROMPT
 from .tools.image_gen import generate_keyframe
+from .tools.media_paths import local_to_media_url, media_url_to_local
 
 # 项目根目录：reference_gen.py -> multimedia -> agent -> src -> <root>
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -45,12 +46,14 @@ def _ext_from_url(url: str, default: str = ".png") -> str:
 
 
 def _local_media_path(src: Path) -> Optional[str]:
-    """若本地文件位于项目内，返回其 /media 相对路径；否则 None。"""
-    try:
-        rel = src.resolve().relative_to(PROJECT_ROOT)
-        return f"/media/{str(rel).replace(os.sep, '/')}"
-    except (ValueError, OSError):
-        return None
+    """若本地文件位于项目内，返回其 /media URL；否则 None。
+
+    统一走 media_paths.local_to_media_url：output/ 内产出 output-relative 的
+    ``/media/<rel>``（static_server 文档约定），output/ 之外退化为带项目根名的
+    ``/media/<root>/<rel>``（root_marker 兜底）。修复此前直接 relative_to(PROJECT_ROOT)
+    产出 ``/media/output/...``，使下游按 output-relative 解析时二次拼出 output/output/。
+    """
+    return local_to_media_url(src)
 
 
 def _ref_cache_enabled() -> bool:
@@ -86,7 +89,9 @@ def _ref_cache_store(prompt: str, size: str, media_path: str) -> None:
     try:
         if not media_path or not media_path.startswith("/media/"):
             return
-        src = PROJECT_ROOT / media_path[len("/media/"):]
+        src = media_url_to_local(media_path)
+        if src is None:
+            return
         if src.is_file() and src.stat().st_size > 0:
             dst = _ref_cache_dir() / f"{_ref_cache_key(prompt, size)}.png"
             if not dst.exists():
@@ -122,7 +127,7 @@ def _persist_reference_image(remote_url: str, thread_id: str, category: str, nam
             dest = target_dir / f"{safe_name}{_ext_from_url(remote_url)}"
             shutil.copyfile(src, dest)
             if dest.is_file() and dest.stat().st_size > 0:
-                return f"/media/{str(dest.relative_to(PROJECT_ROOT)).replace(os.sep, '/')}"
+                return local_to_media_url(dest) or remote_url
             return remote_url
         # —— 远程 URL ——
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -135,8 +140,7 @@ def _persist_reference_image(remote_url: str, thread_id: str, category: str, nam
                 if chunk:
                     f.write(chunk)
         if dest.is_file() and dest.stat().st_size > 0:
-            rel = str(dest.relative_to(PROJECT_ROOT)).replace(os.sep, "/")
-            return f"/media/{rel}"
+            return local_to_media_url(dest) or remote_url
     except Exception as exc:  # noqa: BLE001
         logger.warning("参考图本地持久化失败，回退原值: %s (%s)", remote_url, exc)
     return remote_url

@@ -25,6 +25,8 @@ import os
 import time
 import json
 import base64
+
+from .media_paths import media_url_to_local
 import requests
 from pathlib import Path as _Path
 
@@ -95,8 +97,9 @@ def _resolve_image(url_or_path: str) -> str:
                 return ""
         return url_or_path
     if url_or_path.startswith("/media/"):
-        # 本地路径（含 /media/ 还原）转 base64 内联发送
-        local = str(PROJECT_ROOT / "output" / url_or_path[len("/media/"):])
+        # 本地路径（含 /media/ 还原）转 base64 内联发送（兼容两种 /media 约定）
+        _lp = media_url_to_local(url_or_path)
+        local = str(_lp) if _lp else str(PROJECT_ROOT / "output" / url_or_path[len("/media/"):])
         if os.path.isfile(local):
             with open(local, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode("ascii")

@@ -23,6 +23,7 @@ from ..state import MultimediaState
 from ..tools.image_gen import generate_keyframe
 from ..tools.video_gen import FreeTierQuotaExhaustedError, _MOTION_NEGATIVE_PROMPT, generate_video_from_image
 from ..tools.video_stitcher import download_video
+from ..tools.media_paths import output_dir as _output_dir
 from ..tools.vision_eval import assess_character_consistency, evaluate_image, evaluate_video
 from .common import APPROVE_ACTIONS, CHARACTER_CONSISTENCY_THRESHOLD, FIX_EXTEND, FIX_KEEP_FIRST_FRAME, FIX_PROMPT_ONLY, FIX_REIMAGE, MAX_VIDEO_GEN_FAILURES, VLM_CONSISTENCY_THRESHOLD, _CONSISTENCY_VLM_ENABLED, _DEFAULT_STYLE_KEY, _STYLE_QUALITY_BAR, _decide, _is_review_pass, _normalize_fix_type
 from .design import _filter_reference_images, _first_url, _is_turnaround_sheet, _match_reference_elements
@@ -731,7 +732,8 @@ def video_gen_node(state: MultimediaState, config: RunnableConfig | None = None)
     thread_id = ""
     if config:
         thread_id = (config.get("configurable") or {}).get("thread_id", "") or ""
-    base_output = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "output")
+    # 【修复 P2-3 回归】同上：nodes/ 多一层，旧 dirname×3 会落到 <root>/src/agent。
+    base_output = str(_output_dir())
     if thread_id:
         clips_dir = os.path.join(base_output, "clips", thread_id)
     else:

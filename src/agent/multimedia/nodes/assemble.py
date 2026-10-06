@@ -19,6 +19,7 @@ from ..tools.tts import generate_voiceover
 from ..tools.video_pack import apply_color_preset, attach_title_cards
 from ..tools.video_post import enhance_final_cut
 from ..tools.video_stitcher import stitch_videos
+from ..tools.media_paths import output_dir as _output_dir
 from ..tools.vision_eval import critic_final_cut
 from .common import _normalize_decision
 
@@ -341,11 +342,11 @@ def stitcher_node(state: MultimediaState, config: RunnableConfig | None = None):
         thread_id = (config.get("configurable") or {}).get("thread_id", "") or ""
     output_filename = ""
     if thread_id:
-        # 仓库根：graph.py 位于 <root>/src/agent/multimedia/，需上溯 4 层
-        base_output = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
-            "output",
-        )
+        # 【修复 P2-3 回归】本模块位于 <root>/src/agent/multimedia/nodes/，拆分后比原来
+        # 多了一层目录；沿用旧的 dirname×4 会落到 <root>/src（少上溯一层），成片被写进
+        # src/output，而 /media、history_api、agnes 都按 <root>/output 解析 → 前端取不到
+        # 带配音+字幕的完整成片。统一改用 media_paths.output_dir()（单一真源）。
+        base_output = str(_output_dir())
         thread_clips = os.path.join(base_output, "clips", thread_id)
         os.makedirs(thread_clips, exist_ok=True)
         output_filename = os.path.join(thread_clips, "FINAL_成片.mp4")
@@ -384,8 +385,7 @@ def stitcher_node(state: MultimediaState, config: RunnableConfig | None = None):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         slug = re.sub(r"[^\w\u4e00-\u9fff]", "", (task or "video")[:20])
         output_filename = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "output", "clips", f"{slug}_{ts}", "FINAL_成片.mp4",
+            str(_output_dir()), "clips", f"{slug}_{ts}", "FINAL_成片.mp4",
         )
         os.makedirs(os.path.dirname(output_filename), exist_ok=True)
 

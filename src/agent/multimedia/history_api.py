@@ -516,8 +516,14 @@ async def _build_merged_values(saver: AsyncSqliteSaver, cfg: dict, latest: Any) 
             final_url = _to_media_url(fa)
     if final_url is None and thread_id:
         own_dir = os.path.join(_project_root(), "output", "clips", thread_id)
-        # 成片命名三变体统一兜底（名称优先级：带音轨 > 字幕 > 纯成片）
-        for name in ("FINAL_成片_subs_audio.mp4", "FINAL_成片_subs.mp4", "FINAL_成片.mp4"):
+        # 成片命名统一兜底（名称优先级：带音轨 > 字幕 > 纯成片）。
+        # 注意：P2-1 包装层会在基础名后插入 "_packed"（FINAL_成片_packed_subs_audio.mp4），
+        # 故此处两种命名都要认，否则磁盘兜底永远命中不到完整成片。
+        for name in (
+            "FINAL_成片_subs_audio.mp4", "FINAL_成片_packed_subs_audio.mp4",
+            "FINAL_成片_subs.mp4", "FINAL_成片_packed_subs.mp4",
+            "FINAL_成片_packed.mp4", "FINAL_成片.mp4",
+        ):
             own_final = os.path.join(own_dir, name)
             if os.path.isfile(own_final):
                 final_url = "/media/clips/" + thread_id + "/" + name

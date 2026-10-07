@@ -108,6 +108,7 @@ function SceneCard({
   scene,
   idx,
   active,
+  follow,
   onZoom,
   onCompare,
   subtitles,
@@ -126,6 +127,8 @@ function SceneCard({
   scene: SceneLike;
   idx: number;
   active: boolean;
+  /** 是否「跟随生成进度」自动滚动（仅任务运行中为 true；历史/已完成回放不滚动） */
+  follow: boolean;
   onZoom: (item: LightboxItem) => void;
   onCompare: (left: LightboxItem, right: LightboxItem, title: string) => void;
   subtitles?: SubtitleEntry[];
@@ -144,13 +147,18 @@ function SceneCard({
   const [expanded, setExpanded] = useState(active);
   const cardRef = useRef<HTMLElement | null>(null);
 
-  // 镜头变为当前执行镜头时自动展开 + 滚入视口
+  // 镜头变为当前执行镜头时自动展开；仅在任务运行中（follow）才滚入视口。
+  // 【修复】此前无条件滚动：打开历史 / 已完成任务时，当前活跃镜头（通常是最后一镜）
+  // 会立刻被滚入视口，把 .product-zone 这一内部滚动容器拉到底，位于其顶部的
+  // 「最终成片」被推出视口 —— 用户表现为「看不到成片」。
+  // 现改为：只有正在生成（follow=true，来自 runActive）时才自动跟随。
+  // 注：不能用「首次挂载抑制」——dev 下 StrictMode 会双跑 effect，第二次仍会滚动。
   useEffect(() => {
-    if (active) {
-      setExpanded(true);
-      cardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  }, [active]);
+    if (!active) return;
+    setExpanded(true);
+    if (!follow) return;
+    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [active, follow]);
 
   const finished = !!(scene.video_is_perfect && scene.final_video_url);
   const stateMeta = CARD_STATE_META[cardState];
@@ -614,6 +622,7 @@ export function SceneGallery({
               scene={scene}
               idx={idx}
               active={activeIdx === idx}
+              follow={!!runActive}
               subtitles={subtitleByScene?.get(idx)}
               cardState={cardState}
               phaseLabel={scenePhase}

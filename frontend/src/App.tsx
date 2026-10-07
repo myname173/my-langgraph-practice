@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAgentStream } from "./hooks/useAgentStream";
 import { TaskLauncher } from "./components/TaskLauncher";
 import { QuickGeneratePanel } from "./components/QuickGeneratePanel";
@@ -65,6 +65,15 @@ export default function App() {
   const [showSplash, setShowSplash] = useState<boolean>(() => shouldPlaySplash());
   // F-6：窄屏导航抽屉（≤900px 出现汉堡按钮，侧栏改为左侧抽屉）
   const [navOpen, setNavOpen] = useState(false);
+  // 【修复】打开/切换会话时把滚动容器复位，保证「最终成片」第一时间可见。
+  // 需要同时复位两层：.product-zone（产物内部滚动）与 .main（页面主滚动），
+  // 否则任一层残留的滚动位置都会把成片顶出视口。
+  const mainRef = useRef<HTMLElement | null>(null);
+  const productZoneRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0 });
+    productZoneRef.current?.scrollTo({ top: 0 });
+  }, [threadId]);
   const busy = status === "running";
 
   // F-5：当前执行阶段（从时间轴最新节点推导），供镜头卡展示「生成中」细态
@@ -158,7 +167,7 @@ export default function App() {
         onClose={() => setNavOpen(false)}
       />
 
-      <main className="main">
+      <main className="main" ref={mainRef}>
         <header className="app-header">
           {/* F-6：窄屏汉堡按钮，展开历史会话抽屉 */}
           <button
@@ -292,7 +301,7 @@ export default function App() {
                   </div>
                 )}
 
-                <div className="product-zone">
+                <div className="product-zone" ref={productZoneRef}>
                   <ErrorBoundary label="产物区">
                     <FinalMoviePlayer state={state} />
                     <AudioSubtitlePanel state={state} />

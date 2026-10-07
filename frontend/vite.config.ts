@@ -39,6 +39,11 @@ export default defineConfig({
         target: MEDIA_TARGET,
         changeOrigin: true,
       },
+      // 镜头配方卡接口（static_server.py 的 /recipe/*），与 /media 同源转发
+      "/recipe": {
+        target: MEDIA_TARGET,
+        changeOrigin: true,
+      },
       // 设置面板接口（static_server.py 的 GET/POST /settings），与 /media 同源转发
       "/settings": {
         target: MEDIA_TARGET,

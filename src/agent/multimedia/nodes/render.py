@@ -24,6 +24,7 @@ from ..tools.image_gen import generate_keyframe
 from ..tools.video_gen import FreeTierQuotaExhaustedError, _MOTION_NEGATIVE_PROMPT, generate_video_from_image
 from ..tools.video_stitcher import download_video
 from ..tools.media_paths import output_dir as _output_dir
+from ..tools.frame_extract import relay_mode as _relay_mode, resolve_local_video as _resolve_relay_local
 from ..tools.vision_eval import assess_character_consistency, evaluate_image, evaluate_video
 from .common import APPROVE_ACTIONS, CHARACTER_CONSISTENCY_THRESHOLD, FIX_EXTEND, FIX_KEEP_FIRST_FRAME, FIX_PROMPT_ONLY, FIX_REIMAGE, MAX_VIDEO_GEN_FAILURES, VLM_CONSISTENCY_THRESHOLD, _CONSISTENCY_VLM_ENABLED, _DEFAULT_STYLE_KEY, _STYLE_QUALITY_BAR, _decide, _is_review_pass, _normalize_fix_type
 from .design import _filter_reference_images, _first_url, _is_turnaround_sheet, _match_reference_elements
@@ -42,6 +43,12 @@ _ANTI_DEFORMATION_BLOCK = (
     "Render weapons as clear, tangible objects held in a natural grip, with light effects "
     "enhancing rather than swallowing them.]"
 )
+
+
+def _hard_relay_enabled() -> bool:
+    """硬接力开关：默认开。置 0/false/off/no 回到旧的「软参考重绘」路径。"""
+    return (os.getenv("MULTIMEDIA_FLF_HARD_RELAY", "1") or "1").strip().lower() \
+        not in ("0", "false", "off", "no")
 
 
 def image_gen_node(state: MultimediaState):
@@ -71,6 +78,35 @@ def image_gen_node(state: MultimediaState):
         print(f"    ♻️ [Shot {idx+1}] 一致性闭环要求重生，忽略已缓存关键帧，重新生图")
 
     scenes = state["scenes"].copy()
+
+    # ── P0-hard：真实末帧「硬接力」当首帧（默认开）──────────────────────────
+    # 诊断（thread real2shot_lib_1791279154）：把上一镜真实末帧仅当 img2img
+    # 软参考时，即梦的「多参考融合」保不住构图 —— 重绘首帧与接力帧像素相关
+    # r≈-0.02、视频实际首帧与接力帧 r≈0.11、接缝 r≈0.11，观众看到明显跳变。
+    # 故默认改为：存在可解析的真实接力帧时，**直接以其作为本镜视频首帧**，
+    # 构成真正的 FLF 首尾帧链（首帧=上一镜真实末帧，尾帧=本镜独立生成的目标尾帧），
+    # 从根上消除接缝漂移；并省去一次首帧重绘（更省额度）。
+    # 门控：MULTIMEDIA_FLF_HARD_RELAY（默认 1）；置 0 回退旧的软参考重绘。
+    if idx > 0 and _hard_relay_enabled():
+        _relay_ref = (state.get("scene_anchors") or {}).get("last_frame_url")
+        _relay_local = _resolve_relay_local(_relay_ref)
+        if _relay_local:
+            scenes[idx]["image_url"] = _relay_local
+            scenes[idx].pop("last_image_url", None)
+            scenes[idx]["iterations"] = scenes[idx].get("iterations", 0) + 1
+            scenes[idx]["continuity_relay_first_frame"] = True
+            _rp_img = dict(scenes[idx].get("render_params") or {})
+            _rp_img["image"] = {
+                "backend": "relay",
+                "size": "source",
+                "reference_images": [str(_relay_ref or "")],
+                "ref_strength": None,
+                "source": "last_frame_relay",
+            }
+            scenes[idx]["render_params"] = _rp_img
+            print(f"    [P0-hard] 镜头 {idx+1} 直接以上一镜真实末帧为视频首帧"
+                  f"（硬接力，接缝零漂移；跳过首帧重绘）: {str(_relay_local)[:110]}")
+            return {"scenes": scenes, "use_first_last_frame": True}
 
     # ── 复用素材库资产（assets_imported）──
     # 素材参考图(reference_sheets) 本质只是"参考/锚点"，不应直接当首尾帧。

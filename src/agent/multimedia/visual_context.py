@@ -12,6 +12,11 @@ Visual Context Retrieval Layer (Phase 1)
     - 规则驱动 + 分类映射（无 embedding / vector DB）
     - 输出结构化 visual context，不做文本拼接
     - director 是"决策器"，不是"翻译器"
+
+LLM 认知层（llm_cognition.py）：
+    意图分类（_resolve_scene_intent）与风格识别（_resolve_genres）默认改由大模型语义判断，
+    规则实现降级为「校验 + 兜底」。关闭方式：env MULTIMEDIA_LLM_INTENT=0，
+    或调用 build_visual_context(..., use_llm=False)。任何 LLM 异常均静默回退规则，不阻断。
 """
 
 import json
@@ -262,12 +267,59 @@ def determine_pacing_phase(scene_index: int, total_scenes: int) -> str:
 # 3. 视觉上下文组装器
 # ============================================================
 
+# ============================================================
+# 2.5 LLM 认知层接入（意图 / 风格）
+# ============================================================
+
+def _llm_layer_wanted(use_llm: Optional[bool]) -> bool:
+    """是否尝试 LLM 认知层：use_llm=False 关闭；True 强制尝试；None 跟随 env。"""
+    if use_llm is False:
+        return False
+    if use_llm is True:
+        return True
+    try:
+        from .llm_cognition import llm_enabled
+        return llm_enabled("intent")
+    except Exception:
+        return False
+
+
+def _resolve_scene_intent(script: str, global_setting: str, use_llm: Optional[bool]) -> str:
+    """场景意图分类：LLM 语义判断优先，失败 / 关闭时回退加权关键词匹配。"""
+    if _llm_layer_wanted(use_llm):
+        try:
+            from .llm_cognition import classify_intent_llm
+            res = classify_intent_llm(script, global_setting, list(_INTENT_KEYWORDS.keys()))
+            if res and res.get("intent"):
+                print(f"    [LLM] 意图分类: {res['intent']}（置信度 {res.get('confidence', 0):.2f}）— {res.get('reason', '')}")
+                return res["intent"]
+        except Exception as _e:  # noqa: BLE001
+            print(f"    [!] LLM 意图分类异常，回退规则: {type(_e).__name__}")
+    return classify_scene_intent(script)
+
+
+def _resolve_genres(global_setting: str, use_llm: Optional[bool]) -> List[str]:
+    """全局风格识别：LLM 语义识别优先，失败 / 关闭时回退关键词匹配。"""
+    if _llm_layer_wanted(use_llm):
+        try:
+            from .llm_cognition import detect_genres_llm
+            res = detect_genres_llm(global_setting, list(_GENRE_KEYWORDS.keys()))
+            # 空列表是合法答案（明确"无匹配风格"），区别于 None（失败）
+            if res is not None:
+                print(f"    [LLM] 风格识别: {res if res else '（无匹配风格）'}")
+                return res
+        except Exception as _e:  # noqa: BLE001
+            print(f"    [!] LLM 风格识别异常，回退关键词匹配: {type(_e).__name__}")
+    return detect_global_genre(global_setting)
+
+
 def build_visual_context(
     script: str,
     global_setting: str,
     scene_index: int,
     total_scenes: int,
     prev_anchors: Optional[Dict] = None,
+    use_llm: Optional[bool] = None,
 ) -> Dict[str, any]:
     """
     核心函数：根据场景剧本 + 全局设定 → 生成结构化视觉上下文。
@@ -279,6 +331,8 @@ def build_visual_context(
         total_scenes: 总场景数
         prev_anchors: 上一场景的视觉锚点（由 advance_scene 提取），
                       用于生成场景间的视觉连续性约束。首场景为 None。
+        use_llm: 是否启用 LLM 认知层做意图 / 风格判断。None=跟随 env
+                 （MULTIMEDIA_LLM_INTENT，默认开）；False=强制走纯规则。
 
     Returns:
         {
@@ -294,8 +348,8 @@ def build_visual_context(
             "continuity_directives": Optional[Dict],  # 场景连续性指令
         }
     """
-    # Step 1: 场景意图分类
-    intent = classify_scene_intent(script)
+    # Step 1: 场景意图分类（LLM 认知层优先，失败 / 关闭时回退规则）
+    intent = _resolve_scene_intent(script, global_setting, use_llm)
 
     # Step 2: 从知识库获取意图对应的视觉规则
     # 容错：未知 intent 降级到 world_building（最通用的视觉规则）
@@ -311,8 +365,8 @@ def build_visual_context(
     if ambient_context:
         print(f"    [*] 环境光照: {ambient_context} → 已替换 {len(base_lighting) - len(adjusted_lighting) + len(AMBIENT_LIGHTING_OVERRIDES.get(ambient_context, []))} 条光照规则")
 
-    # Step 3: 全局风格检测 → 叠加修饰器
-    genres = detect_global_genre(global_setting)
+    # Step 3: 全局风格检测（LLM 认知层优先）→ 叠加修饰器
+    genres = _resolve_genres(global_setting, use_llm)
     genre_mods: Dict[str, List[str]] = {}
     for genre in genres:
         mods = GENRE_MODIFIERS.get(genre, {})

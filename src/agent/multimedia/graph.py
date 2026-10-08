@@ -752,6 +752,16 @@ _REF_OWNER = {
     name: tuple(f"{_PKG}.nodes.{m}" for m in subs) for name, subs in _REF_SUBS.items()
 }
 
+# 非 nodes/ 子模块（顶层模块）的转发表：dict 值形如 {名字: (顶层模块短名, ...)}。
+# 用途：LLM 认知层（llm_cognition.py）持有自己的 call_llm 绑定，若仍沿用历史
+# `import ...graph as G; G.call_llm = fake` 的注入方式，必须一并转发到该模块，
+# 否则测试里的假 LLM 只作用于 nodes/ 子模块，认知层会绕过 mock 去打真实网络。
+_TOP_LEVEL_SUBS = {
+    "call_llm": ("llm_cognition",),
+}
+for _n, _mods in _TOP_LEVEL_SUBS.items():
+    _REF_OWNER[_n] = _REF_OWNER.get(_n, ()) + tuple(f"{_PKG}.{m}" for m in _mods)
+
 
 class _CompatModule(_types.ModuleType):
     """对 graph.<name> 的赋值转发到持有该绑定的 nodes 子模块（保留 monkeypatch 语义）。"""

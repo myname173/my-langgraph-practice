@@ -64,6 +64,28 @@ def cinematic_critic_node(state: MultimediaState):
     gates = eval_result.get("gates", {})
     print(f"\n    [*] 综合评分: {eval_result['overall_score']:.2f} ({'PASS' if eval_result['pass_gates'] else 'FAIL'})")
 
+    # ── Phase 4 LLM 语义建议层（advisory only）──────────────────────────────
+    # 规则评分器查不出的"语义层面"问题（情绪与剧本是否相符、镜头顺序是否讲得通、
+    # prompt 语义是否与意图一致）交给大模型判断。结果写入 critic_eval["semantic_review"]
+    # 供人审/下游参考；**绝不参与上面的 pass_gates 判定**，因此不会使门控漂移。
+    try:
+        from ..llm_cognition import llm_enabled as _llm_enabled, semantic_critic_llm
+        if _llm_enabled("semantic_critic"):
+            _sem = semantic_critic_llm(
+                shot_plan,
+                seq_graph,
+                state["scenes"][idx].get("script", ""),
+                content_type,
+            )
+            if _sem:
+                eval_result["semantic_review"] = _sem
+                print(f"    [LLM] 语义评审（建议层，不参与门控）: 评分 {_sem.get('score')}，"
+                      f"{len(_sem.get('issues', []))} 个语义问题")
+                for _it in _sem.get("issues", []):
+                    print(f"        - [{_it.get('severity')}] {_it.get('desc')}")
+    except Exception as _e:  # noqa: BLE001
+        print(f"    [!] 语义评审跳过（建议层）: {type(_e).__name__}")
+
     run_metrics.record_text_llm_eval(
         "cinematic_critic", idx, "结构质量评估",
         time.time() - _t0, 0,

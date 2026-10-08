@@ -207,19 +207,28 @@ def _is_model_disabled(model: str) -> bool:
 def _disable_model(model: str) -> None:
     _DISABLED_MODELS[model] = time.monotonic() + _DISABLED_TTL
 
-def call_llm(prompt_text: str, role_name: str = "LLM", max_tokens: int | None = None) -> str:
-    """通用的 LLM 调用接口（带超时、多模型 fallback 与重试）"""
+def call_llm(prompt_text: str, role_name: str = "LLM", max_tokens: int | None = None,
+             temperature: float | None = None) -> str:
+    """通用的 LLM 调用接口（带超时、多模型 fallback 与重试）。
+
+    temperature: 显式温度。为 None 时按角色名推断（总导演 0.9 / 其余 0.7），
+                 保持历史行为不变；LLM 认知层（结构化分类等）传入低温度以提升确定性。
+    """
     import os as _os
-    # 写入项目根 output/（不在 src/ 内），避免触发 langgraph dev 的 watchfiles reload 循环
-    _llog = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "..", "..", "output", "_llm_calls.txt")
+    # 写入项目根 output/（不在 src/ 内），避免触发 langgraph dev 的 watchfiles reload 循环。
+    # 路径：src/agent/multimedia/tools/ → 上溯 4 级得项目根（tools↓multimedia↓agent↓src↓root）。
+    # 注意：若上溯 5 级会落到项目根之外（父目录通常不存在），open() 失败又被下方
+    # try/except 吞掉，导致调用日志静默失效——保持 4 级。
+    _llog = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "..", "output", "_llm_calls.txt")
     try:
         with open(_llog, "a", encoding="utf-8") as _lf:
             _lf.write(f"[call] role={role_name} len={len(prompt_text)} models={_LLM_FALLBACK_MODELS[:1]}\n")
             _lf.flush()
     except Exception:
         pass
-    # 对总导演增加温度，其它角色保持较低温度
-    temperature = 0.9 if "总导演" in role_name else 0.7
+    # 对总导演增加温度，其它角色保持较低温度；显式传入的 temperature 优先
+    if temperature is None:
+        temperature = 0.9 if "总导演" in role_name else 0.7
     # 长输出（总导演分镜 / 安全审核 / 导演精修）若不限制会触发 DashScope 兼容端点超时挂起，
     # 按角色给一个合理上限，避免无限生成长内容导致 APITimeoutError。
     if max_tokens is None:

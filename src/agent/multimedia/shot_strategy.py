@@ -16,6 +16,11 @@ Shot Strategy Layer (Phase 2)
     - shot_strategy 不生成 prompt，只生成镜头计划（planning layer）
     - director 不再"思考镜头"，只执行 shot_strategy
     - 输出必须是结构化 shot list，不是自然语言描述
+
+LLM 认知层（llm_cognition.py）：
+    镜头计划默认改由大模型创作（generate_shot_plan_llm），原先的 16 套固定镜头模板降级为
+    「镜头数量基准 + 兜底」。关闭方式：env MULTIMEDIA_LLM_SHOT_PLAN=0，或传
+    generate_shot_strategy(..., use_llm=False)。LLM 不可用/校验不过时自动回退模板。
 """
 
 import json
@@ -801,12 +806,124 @@ def _add_adjacency_hints(shots: List[Dict]) -> None:
 
 
 # ============================================================
+# 6.5  LLM 认知层辅助（镜头计划创作）
+# ============================================================
+
+def _llm_shot_wanted(use_llm: Optional[bool]) -> bool:
+    """是否尝试 LLM 分镜创作：use_llm=False 关闭；True 强制；None 跟随 env。"""
+    if use_llm is False:
+        return False
+    if use_llm is True:
+        return True
+    try:
+        from .llm_cognition import llm_enabled
+        return llm_enabled("shot_plan")
+    except Exception:
+        return False
+
+
+def _shot_vocab() -> Dict[str, List[str]]:
+    """从 shot_templates.json 汇总摄影词汇，供 LLM 分镜创作参考。
+
+    目的：给大模型一份“项目下游规则能识别”的词汇表，避免它自创
+    无法被运镜 / 转场矩阵识别的自由文本，同时保留合理自创空间。
+    """
+    key_map = {
+        "type": "types", "movement": "movements", "angle": "angles",
+        "lens": "lenses", "orientation": "orientations", "tracking": "trackings",
+    }
+    buckets: Dict[str, List[str]] = {v: [] for v in key_map.values()}
+    emotions: List[str] = []
+    for _tpls in SHOT_TEMPLATES.values():
+        for t in _tpls:
+            cam = t.get("camera", {}) or {}
+            for ck, bk in key_map.items():
+                val = str(cam.get(ck) or "").strip()
+                if val and val not in buckets[bk]:
+                    buckets[bk].append(val)
+            em = str(t.get("emotion") or "").strip()
+            if em and em not in emotions:
+                emotions.append(em)
+    buckets["emotions"] = emotions
+    return buckets
+
+
+def _complete_shot_from_spec(
+    spec: Dict[str, Any],
+    script: str,
+    genres: List[str],
+    ambient_context: Optional[str] = None,
+) -> Dict[str, Any]:
+    """把 LLM 创作的镜头规格补全为下游可消费的完整 shot。
+
+    与 _fill_shot_details 同构：补齐 focus_object / lens_feel / lighting.full_description /
+    ambient 叠加 / motion_duration。规则只做「校验 + 补全」，不覆盖 LLM 的创作选择。
+    """
+    _cam = spec.get("camera") or {}
+    _light = spec.get("lighting") or {}
+    shot: Dict[str, Any] = {
+        "shot_name": spec.get("shot_name") or "shot",
+        "camera": {k: str(_cam.get(k) or "").strip()
+                   for k in ("type", "movement", "angle", "lens", "orientation", "tracking")},
+        "lighting": {
+            "setup": str(_light.get("setup") or "").strip(),
+            "contrast": str(_light.get("contrast") or "medium").strip(),
+        },
+        "emotion": spec.get("emotion") or "presence",
+        "pacing_weight": spec.get("pacing_weight", 0.25),
+        "focus_category": spec.get("focus_category") or "character",
+    }
+    # 摄影词汇缺失项兜底（避免下游规则读到空串）
+    shot["camera"]["type"] = shot["camera"]["type"] or "wide shot"
+    shot["camera"]["movement"] = shot["camera"]["movement"] or "slow dolly in"
+    shot["camera"]["angle"] = shot["camera"]["angle"] or "eye level"
+    shot["camera"]["orientation"] = shot["camera"]["orientation"] or "three_quarter"
+    shot["camera"]["tracking"] = shot["camera"]["tracking"] or "observe_from_distance"
+    if shot["lighting"]["contrast"] not in ("low", "medium", "high", "extreme"):
+        shot["lighting"]["contrast"] = "medium"
+
+    # 焦点对象（规则提取，作为下游素材匹配的结构化信号）
+    shot["focus_object"] = _extract_focus(script)
+
+    # 剧本强情绪信号优先（与模板路径同一规则）
+    script_emotion = _detect_script_emotion(script)
+    if script_emotion:
+        shot["emotion"] = script_emotion
+
+    # 镜头焦距描述
+    cam_type = shot["camera"]["type"]
+    shot["lens_feel"] = _LENS_RULES.get(cam_type, "35mm standard")
+
+    # 环境光照补充（保留 LLM 设定的差异，将环境光照作为补充追加）
+    if ambient_context and ambient_context in AMBIENT_LIGHTING_OVERRIDES:
+        ambient_rules = AMBIENT_LIGHTING_OVERRIDES[ambient_context]
+        original_setup = shot["lighting"]["setup"]
+        shot["lighting"]["setup"] = f"{original_setup}; ambient: {'; '.join(ambient_rules)}"
+
+    # genre 光照叠加
+    genre_parts = []
+    for genre in genres:
+        mod = GENRE_LIGHTING_MODIFIERS.get(genre)
+        if mod:
+            genre_parts.append(f"{mod['overlay']}, {mod['atmosphere']}")
+    if genre_parts:
+        original = shot["lighting"]["setup"]
+        shot["lighting"]["full_description"] = f"{original}; enhanced with {'; '.join(genre_parts)}"
+    else:
+        shot["lighting"]["full_description"] = shot["lighting"]["setup"]
+
+    shot["motion_duration"] = _MOTION_DURATION_DEFAULT
+    return shot
+
+
+# ============================================================
 # 7. 主入口
 # ============================================================
 
 def generate_shot_strategy(
     script: str,
     visual_context: Dict[str, Any],
+    use_llm: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     核心函数：根据 scene script + Phase 1 的 visual_context
@@ -822,6 +939,11 @@ def generate_shot_strategy(
             "end_shot_index": int,        # 尾帧使用的镜头（双帧模式）
             "formatted_plan": str,        # 导演可读的指令块
         }
+
+    Args:
+        use_llm: 是否由大模型创作镜头计划。None=跟随 env
+                 （MULTIMEDIA_LLM_SHOT_PLAN，默认开）；False=强制走模板硬选。
+                 LLM 输出校验不过时自动回退模板。
     """
     intent = visual_context.get("intent", "world_building")
     pacing_phase = visual_context.get("pacing_phase", "opening")
@@ -833,27 +955,48 @@ def generate_shot_strategy(
         genre_mods = visual_context.get("genre_modifiers", {})
         genre_list = list(genre_mods.keys()) if isinstance(genre_mods, dict) and genre_mods else []
 
-    # 获取镜头模板
+    # 获取镜头模板（同时作为 LLM 路径的镜头数量基准与兜底）
     templates = SHOT_TEMPLATES.get(intent, SHOT_TEMPLATES["world_building"])
 
-    # 获取环境光照上下文（昼夜/天气），传递给 _fill_shot_details
+    # 获取环境光照上下文（昼夜/天气），传递给镜头填充
     ambient_context = visual_context.get("ambient_context")
 
-    # 填充每个 shot 的具体规格
-    shots = []
-    for template in templates:
-        filled = _fill_shot_details(template, script, genre_list, ambient_context=ambient_context)
-        shots.append(filled)
+    # ── Phase 2 LLM 认知层：由大模型创作镜头计划（失败 / 关闭时回退模板硬选）──
+    llm_spec = None
+    if _llm_shot_wanted(use_llm):
+        try:
+            from .llm_cognition import generate_shot_plan_llm
+            llm_spec = generate_shot_plan_llm(script, visual_context, len(templates), _shot_vocab())
+        except Exception as _e:  # noqa: BLE001
+            print(f"    [!] LLM 分镜创作异常，回退模板: {type(_e).__name__}")
+            llm_spec = None
+
+    if llm_spec:
+        shots = [_complete_shot_from_spec(s, script, genre_list, ambient_context) for s in llm_spec["shots"]]
+        _rationale = llm_spec.get("rationale", "")
+        print(f"    [LLM] 分镜创作: {len(shots)} shots" + (f" — {_rationale}" if _rationale else ""))
+    else:
+        # ── 兜底：模板硬选（改造前行为）──
+        shots = []
+        for template in templates:
+            filled = _fill_shot_details(template, script, genre_list, ambient_context=ambient_context)
+            shots.append(filled)
 
     # Phase 3: 添加 adjacency hints（镜头邻接提示）
     # 为 sequence_orchestrator 提供前置线索
     _add_adjacency_hints(shots)
 
-    # 选择英雄镜头
-    hero_index = _select_hero_shot(shots, pacing_phase)
+    # 选择英雄 / 尾帧镜头：LLM 给出合法索引则采纳，否则回退规则评分
+    if llm_spec and llm_spec.get("hero_shot_index") is not None:
+        hero_index = llm_spec["hero_shot_index"]
+        print(f"    [LLM] hero shot: #{hero_index + 1}（由分镜创作指定）")
+    else:
+        hero_index = _select_hero_shot(shots, pacing_phase)
 
-    # 选择尾帧镜头
-    end_index = _select_end_shot(shots, hero_index)
+    if llm_spec and llm_spec.get("end_shot_index") is not None:
+        end_index = llm_spec["end_shot_index"]
+    else:
+        end_index = _select_end_shot(shots, hero_index)
 
     # 光照去同质化：基于 emotion/pacing/hero 为每个镜头追加差异化光照修饰
     _diversify_lighting(shots, hero_index)

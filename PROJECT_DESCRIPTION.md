@@ -1,6 +1,11 @@
 ## AI 多模态游戏宣传片生成 Agent 系统
 
-基于 LangGraph 构建的 22 节点 StateGraph 管线，输入一段创意描述（如"赛博朋克风格的未来都市枪战宣传片"），自动完成从剧本策划、视觉设计、镜头编排、质量评审、图像/视频生成到最终拼接的全流程。全系统仅 Director 节点调用 LLM 做创意决策，其余模块均为纯规则驱动——零额外 LLM 成本、确定性输出、零延迟。
+基于 LangGraph 构建的 StateGraph 管线，输入一段创意描述（如"赛博朋克风格的未来都市枪战宣传片"），自动完成从剧本策划、视觉设计、镜头编排、质量评审、图像/视频生成到最终拼接的全流程。
+
+> **2026-10-08 修订**：原先「仅 Director 节点调用 LLM、其余模块全纯规则」的表述已更新。
+> 现 Phase 1（意图/风格）、Phase 2（镜头计划）、Phase 5（三专家协作）由 **LLM 认知层**接管，
+> Phase 4 增加 LLM 语义建议层；规则从「大脑」降为「校验 + 兜底」。质量闸门仍由规则裁决。
+> 详见文末「LLM 认知层」章节。
 
 ---
 
@@ -969,3 +974,59 @@ bash start.sh
 ### 数据流一句话总结
 
 用户创意 → showrunner 拆 4 个 scene → 每个 scene 经规则驱动视觉设计（5 个 Phase 节点）→ RAG 知识叠加 → director LLM 生成 prompt → 图像生成+审核循环 → 视频生成+审核循环 → 全 scene 拼接为最终宣传片。
+
+---
+
+## LLM 认知层（2026-10-08）
+
+### 为什么改
+
+原实现把「理解与创作」也压给了规则：Phase 1 用关键词加权猜意图/风格，Phase 2 从 16 套固定模板里硬选镜头，Phase 5 的「三专家辩论」实为跨领域冲突检测规则（三个专家根本没有推理参与）。后果是开放式中文创意容易漏判、镜头被模板框死、所谓的团队协商等于没有。
+
+真正的成本大头是视频生成（按次/按额度），文本 LLM 那几次调用相对可忽略——所以「省 LLM」在这里省错了地方。
+
+### 分工原则
+
+| 交给 LLM（生成与判断） | 留给规则（约束与裁判） |
+|---|---|
+| 意图理解、风格识别、镜头计划创作、语义级问题判断、跨专家协商 | 质量闸门 PASS/FAIL、阈值判断、转场/运动衔接矩阵、prompt 清洗校验、降级路径 |
+
+关键：**闸门不能由 LLM 独占**——否则会漂移、在重写循环里震荡。LLM 只做评分输入/顾问，规则做裁判。
+
+### 改了哪些环节
+
+| 环节 | 改造前 | 改造后 | 文件 |
+|---|---|---|---|
+| Phase 1 意图 | `classify_scene_intent` 关键词加权 | `classify_intent_llm` 结构化分类，规则兜底 | `llm_cognition.py` / `visual_context.py` |
+| Phase 1 风格 | `detect_global_genre` 关键词匹配 | `detect_genres_llm` 语义识别，规则兜底 | 同上 |
+| Phase 2 镜头计划 | 16 套模板硬选 | `generate_shot_plan_llm` 创作 + 规则补全校验 | `llm_cognition.py` / `shot_strategy.py` |
+| Phase 4 语义 | 无（规则只能查结构问题） | `semantic_critic_llm` 建议层，**不参与闸门** | `llm_cognition.py` / `nodes/director.py` |
+| Phase 5 专家 | 规则伪辩论 | `studio_agents_llm` 真·三专家联席评审 + 协商 | `llm_cognition.py` / `film_studio_orchestrator.py` |
+
+**保留不动**：Phase 3 序列编排（图谱型知识查表）、Phase 4 四维评分与三级门控、全部 sanitize/normalize/校验/降级路径。
+
+### 工程约束
+
+- **绝不阻断**：任何异常 / 超时 / JSON 解析失败 → 返回 `None`，调用方回退规则实现。
+- **绝不漂移**：`cinematic_critic` 的 `pass_gates` 判定完全不受 LLM 影响，语义评审只写进 `critic_eval["semantic_review"]` 供人审参考。
+- **monkeypatch 契约**：`graph.py` 的兼容转发新增 `_TOP_LEVEL_SUBS`，使 `G.call_llm = fake` 同时作用于 `llm_cognition`，既有测试注入方式继续有效。
+- **测试安全**：未显式设置时，pytest 环境下认知层默认关闭（`PYTEST_CURRENT_TEST` 守卫），避免单测触发真实网络调用。
+- **可关闭**：总开关 `MULTIMEDIA_LLM_COGNITION=0` 一键回到改造前行为；分环节另有关闭项。
+
+### 记忆库与 schema 一致性
+
+LLM 路径不直接产出结构化 `style_summary`，由 `_enrich_llm_agent_style` 从 `shot_plan` / `sequence_graph` 反推补出，保证两条路径写入跨场景记忆库（`cinematic_memory`）的 schema 完全一致，跨镜头一致性不因换路径而退化。
+
+### 环境变量
+
+| 变量 | 默认 | 作用 |
+|---|---|---|
+| `MULTIMEDIA_LLM_COGNITION` | 1 | 总开关（pytest 下默认关） |
+| `MULTIMEDIA_LLM_INTENT` | 1 | Phase 1 意图 + 风格 |
+| `MULTIMEDIA_LLM_SHOT_PLAN` | 1 | Phase 2 镜头计划 |
+| `MULTIMEDIA_LLM_STUDIO` | 1 | Phase 5 三专家协作 |
+| `MULTIMEDIA_LLM_SEMANTIC_CRITIC` | 1 | Phase 4 语义建议层 |
+
+### 成本口径
+
+每 scene 约 +4~5 次文本 LLM 调用（意图 1、风格 1、分镜 1、工作室 1、语义 1）。以 4 scene 计约 16~20 次文本调用，与视频生成的分钟级耗时和额度消耗不在一个量级。

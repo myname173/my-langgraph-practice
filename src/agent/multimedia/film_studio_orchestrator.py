@@ -19,9 +19,15 @@ Film Studio Orchestrator (Phase 5)
     - 每个 Agent 只修改自己的领域，不跨界
     - Debate 机制通过规则检测跨领域冲突并自动解决
     - 记忆库维护跨场景风格一致性
+
+LLM 认知层（llm_cognition.py）：
+    三个专家改为由大模型**真正地**联席评审并在分歧处协商（studio_agents_llm）；原先的规则
+    冲突检测降级为「无 LLM 时的兜底」。关闭方式：env MULTIMEDIA_LLM_STUDIO=0，或传
+    orchestrate_film_studio(..., use_llm=False)。LLM 失败/输出不合规时自动回退规则协商。
+    记忆库写入 / 共识评分 / refined_transitions 注入等编排语义两条路径完全一致。
 """
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from .cinematography_agent import optimize_cinematography
 from .lighting_agent import optimize_lighting
@@ -264,6 +270,90 @@ def _run_debate(
 
 
 # ============================================================
+# 2.5 LLM 认知层辅助
+# ============================================================
+
+def _llm_studio_wanted(use_llm: Optional[bool]) -> bool:
+    """是否尝试 LLM 工作室协作：use_llm=False 关闭；True 强制；None 跟随 env。"""
+    if use_llm is False:
+        return False
+    if use_llm is True:
+        return True
+    try:
+        from .llm_cognition import llm_enabled
+        return llm_enabled("studio")
+    except Exception:
+        return False
+
+
+def _enrich_llm_agent_style(
+    cine_result: Dict[str, Any],
+    light_result: Dict[str, Any],
+    edit_result: Dict[str, Any],
+    shot_plan: Dict[str, Any],
+    sequence_graph: Dict[str, Any],
+) -> None:
+    """为 LLM 路径结果补出 style_summary（记忆库 record_scene_style 依赖该字段）。
+
+    LLM 输出侧重「意见与修改」，不含结构化风格快照；这里从 shot_plan / sequence_graph
+    反推，保证两条路径写入跨场景记忆库的 schema 一致（跨镜头一致性不因换路径而退化）。
+    """
+    shots = (shot_plan or {}).get("shots", []) or []
+
+    def _uniq(seq):
+        out = []
+        for x in seq:
+            v = str(x or "").strip()
+            if v and v not in out:
+                out.append(v)
+        return out
+
+    cine_result.setdefault("style_summary", {}).update({
+        "shot_types": _uniq([(s.get("camera") or {}).get("type") for s in shots]),
+        "movements": _uniq([(s.get("camera") or {}).get("movement") for s in shots]),
+        "angles": _uniq([(s.get("camera") or {}).get("angle") for s in shots]),
+        "orientations": _uniq([(s.get("camera") or {}).get("orientation") for s in shots]),
+        "trackings": _uniq([(s.get("camera") or {}).get("tracking") for s in shots]),
+    })
+
+    _weights = [float(s.get("pacing_weight") or 0.0) for s in shots]
+    light_result.setdefault("style_summary", {}).update({
+        "contrasts": _uniq([(s.get("lighting") or {}).get("contrast") for s in shots]),
+        "atmosphere_level": "overlay" if len(shots) > 1 else "base",
+        "pacing_phase": (shot_plan or {}).get("pacing_phase"),
+    })
+
+    _conns = (sequence_graph or {}).get("connections", []) or []
+    edit_result.setdefault("style_summary", {}).update({
+        "transitions": _uniq([c.get("transition") for c in _conns]),
+        "avg_pacing_weight": round(sum(_weights) / len(_weights), 2) if _weights else 0.25,
+        "arc_shape": ((sequence_graph or {}).get("emotional_arc") or {}).get("shape", "unknown"),
+    })
+
+    # 报告格式化需要的文字型字段（_format_studio_report 直接下标访问）
+    _ss_c = cine_result["style_summary"]
+    cine_result.setdefault(
+        "camera_grammar",
+        "lens system: "
+        + ", ".join(_ss_c.get("shot_types") or [])
+        + " | movements: " + ", ".join(_ss_c.get("movements") or [])
+        + " | angles: " + ", ".join(_ss_c.get("angles") or []),
+    )
+    _ss_l = light_result["style_summary"]
+    light_result.setdefault(
+        "lighting_style",
+        "contrast levels: " + ", ".join(_ss_l.get("contrasts") or [])
+        + " | atmosphere: " + str(_ss_l.get("atmosphere_level") or "base"),
+    )
+    _ss_e = edit_result["style_summary"]
+    edit_result.setdefault(
+        "editing_style",
+        "transitions: " + ", ".join(_ss_e.get("transitions") or [])
+        + " | arc: " + str(_ss_e.get("arc_shape") or "unknown"),
+    )
+
+
+# ============================================================
 # 3. 核心编排函数
 # ============================================================
 
@@ -275,6 +365,7 @@ def orchestrate_film_studio(
     total_scenes: int = 1,
     global_setting: str = "",
     thread_id: str = "",
+    use_llm: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     电影工作室编排器核心函数。
@@ -307,29 +398,56 @@ def orchestrate_film_studio(
     # 获取前场景风格（用于跨场景一致性）
     prev_style = get_previous_scene_style(thread_id, scene_index)
 
-    # ── Step 1: Cinematography Agent ──
-    cine_result = optimize_cinematography(
-        shot_plan=shot_plan,
-        visual_context=visual_context,
-        previous_style=prev_style,
-    )
+    # ── LLM 认知层：三专家真·联席评审 + 辩论（失败/关闭时回退规则检测）──
+    llm_agents = None
+    if _llm_studio_wanted(use_llm):
+        try:
+            from .llm_cognition import studio_agents_llm
+            llm_agents = studio_agents_llm(shot_plan, sequence_graph, visual_context, prev_style)
+        except Exception as _e:  # noqa: BLE001
+            print(f"    [!] LLM 工作室协作异常，回退规则协商: {type(_e).__name__}")
+            llm_agents = None
 
-    # ── Step 2: Lighting Agent ──
-    light_result = optimize_lighting(
-        shot_plan=shot_plan,
-        visual_context=visual_context,
-        previous_style=prev_style,
-    )
+    if llm_agents:
+        # style_summary 由 shot_plan 反推（LLM 不直接输出该字段，但记忆库依赖它）
+        cine_result = llm_agents["cinematography"]
+        light_result = llm_agents["lighting"]
+        edit_result = llm_agents["editing"]
+        debate = llm_agents["debate"]
+        _enrich_llm_agent_style(cine_result, light_result, edit_result, shot_plan, sequence_graph)
+        print(
+            f"    [LLM] 三专家联席评审:"
+            f" 摄影 {len(cine_result.get('modifications', []))} /"
+            f" 灯光 {len(light_result.get('modifications', []))} /"
+            f" 剪辑 {len(edit_result.get('modifications', []))} 条修改，"
+            f"{len(debate)} 项分歧已辩结"
+        )
+        if llm_agents.get("summary"):
+            print(f"    [LLM] 工作室结论: {llm_agents['summary']}")
+    else:
+        # ── Step 1: Cinematography Agent ──
+        cine_result = optimize_cinematography(
+            shot_plan=shot_plan,
+            visual_context=visual_context,
+            previous_style=prev_style,
+        )
 
-    # ── Step 3: Editor Agent ──
-    edit_result = optimize_editing(
-        shot_plan=shot_plan,
-        sequence_graph=sequence_graph,
-        previous_style=prev_style,
-    )
+        # ── Step 2: Lighting Agent ──
+        light_result = optimize_lighting(
+            shot_plan=shot_plan,
+            visual_context=visual_context,
+            previous_style=prev_style,
+        )
 
-    # ── Step 4: Debate Phase ──
-    debate = _run_debate(cine_result, light_result, edit_result)
+        # ── Step 3: Editor Agent ──
+        edit_result = optimize_editing(
+            shot_plan=shot_plan,
+            sequence_graph=sequence_graph,
+            previous_style=prev_style,
+        )
+
+        # ── Step 4: Debate Phase ──
+        debate = _run_debate(cine_result, light_result, edit_result)
 
     # ── Step 5: 记录风格到记忆库 ──
     record_scene_style(

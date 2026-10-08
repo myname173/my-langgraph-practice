@@ -50,7 +50,7 @@ _PARALLEL_SHOTS_ENV = "MULTIMEDIA_PARALLEL_SHOTS"
 _SHOT_CTX_KEYS = (
     "task", "global_setting", "visual_style", "style_description", "style_suffix",
     "content_type", "visual_context", "shot_plan", "sequence_graph", "critic_eval",
-    "quality_gates", "rag_context", "narrative_arc", "reference_sheets",
+    "quality_gates", "narrative_arc", "reference_sheets",
     "reference_images", "reference_embeddings", "character_portrait_url",
     "assets_imported", "thread_id", "quality_tier", "asset_match_report",
     "scene_anchors",

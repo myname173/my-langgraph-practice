@@ -147,9 +147,6 @@ class MultimediaState(TypedDict):
     # studio 结果摘要（共识度/修改数/冲突数），供下游观测，避免携带大对象。
     studio_summary: Optional[Dict[str, Any]]
 
-    # Phase RAG: Knowledge Retrieval Layer
-    # 由 visual_context_builder 节点中的 RAG 检索生成，供 director 消费
-    rag_context: Optional[Dict[str, Any]]
 
     # 全局叙事弧（Narrative Arc）
     # 由 showrunner 完成后自动从 scenes 推导生成，供 director 消费

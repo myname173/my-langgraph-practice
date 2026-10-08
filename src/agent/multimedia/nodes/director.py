@@ -125,16 +125,11 @@ def director_refine_node(state: MultimediaState):
         issues_text = "\n".join(f"- {i}" for i in critic_eval["issues"]) if critic_eval["issues"] else "No specific issues found."
         suggestions_text = "\n".join(f"- {s}" for s in critic_eval["suggestions"])
 
-        # 注入 shot_plan 和 RAG 上下文，让精修 LLM 了解原始拍摄意图
+        # 注入 shot_plan，让精修 LLM 了解原始拍摄意图
         shot_plan = state.get("shot_plan", {})
         context_block = ""
         if shot_plan and shot_plan.get("formatted_plan"):
             context_block += f"\n\n[Original Shot Plan — Do NOT contradict these specs]\n{shot_plan['formatted_plan'][:600]}"
-        rag_ctx = state.get("rag_context")
-        if rag_ctx and isinstance(rag_ctx, dict):
-            rag_text = rag_ctx.get("formatted_rag_block", "")
-            if rag_text:
-                context_block += f"\n\n[RAG References]\n{rag_text[:400]}"
         global_setting = state.get("global_setting", "")
         if global_setting:
             context_block += f"\n\n[Global Visual Setting]\n{global_setting[:300]}"
@@ -318,13 +313,6 @@ def director_node(state: MultimediaState):
     else:
         sequence_context_text = "No sequence context available."
 
-    # Phase RAG: 从 state 消费 RAG 检索结果
-    rag_ctx = state.get("rag_context")
-    if rag_ctx and rag_ctx.get("formatted_rag_block"):
-        rag_context_text = rag_ctx["formatted_rag_block"]
-        print(f"    [*] 已注入 RAG Context ({rag_ctx.get('total_retrieved', 0)} refs)")
-    else:
-        rag_context_text = "[RAG Reference — No references available (knowledge base empty or retrieval disabled)]"
 
     # P2-1: Narrative Arc — 本场景在全局叙事弧中的位置
     narrative_arc = state.get("narrative_arc")
@@ -386,7 +374,6 @@ def director_node(state: MultimediaState):
         scene_index=idx + 1,
         shot_plan=shot_plan_text,
         sequence_context=sequence_context_text,
-        rag_context=rag_context_text,
         narrative_arc=narrative_arc_text,
         protected_specs=protected_specs_text,
         environment_anchor=environment_anchor,

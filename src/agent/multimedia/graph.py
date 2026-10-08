@@ -707,7 +707,6 @@ _REF_SUBS = {
 
     "resolve_bgm_mood": ("assemble",),
 
-    "retrieve_rag_context": ("scripting",),
 
     "reviewer_node": ("parallel", "render", "wiring"),
 

@@ -11,7 +11,6 @@ from .. import run_metrics
 from ..cinematic_memory import reset_memory
 from ..config_loader import apply_user_settings
 from ..prompts import SAFETY_PROMPT, SHOWRUNNER_PROMPT
-from ..rag.retriever import retrieve_rag_context
 from ..sequence_orchestrator import build_sequence_graph
 from ..shot_strategy import generate_shot_strategy, rewrite_strategy
 from ..state import MultimediaState
@@ -81,23 +80,7 @@ def visual_context_builder_node(state: MultimediaState):
     print(f"    [*] 推荐镜头: {visual_ctx['camera_rules'][0][:50]}...")
     print(f"    [*] 推荐光影: {visual_ctx['lighting_rules'][0][:50]}...")
 
-    # Phase RAG: 语义检索知识库，获取参考知识
-    rag_result = retrieve_rag_context(
-        script=scene["script"],
-        global_setting=global_setting,
-        intent=visual_ctx.get("intent", ""),
-        verbose=True,
-    )
-
-    # 将 RAG 格式化文本注入 visual_context 供下游可选消费
-    if rag_result:
-        visual_ctx["rag_references"] = rag_result.get("formatted_rag_block", "")
-        print(f"    [*] RAG 检索: {rag_result.get('total_retrieved', 0)} 条参考")
-    else:
-        visual_ctx["rag_references"] = ""
-        print("    [*] RAG 检索: 无结果（静默降级）")
-
-    result = {"visual_context": visual_ctx, "rag_context": rag_result}
+    result = {"visual_context": visual_ctx}
     result.update(scene_resets)  # 注入跨镜头状态重置
     return result
 
@@ -513,7 +496,6 @@ def showrunner_node(state: MultimediaState, config: RunnableConfig | None = None
         "quality_gates": None,
         "rewrite_count": 0,
         "studio_output": None,
-        "rag_context": None,
         "aborted": False,
         "abort_reason": None,
         "error_log": None,

@@ -346,6 +346,26 @@ def _build_shot_chain_graph() -> "StateGraph":
 _compiled_shot_chain = _build_shot_chain_graph().compile()
 
 
+def _subgraph_config(config: RunnableConfig | None) -> Dict[str, Any]:
+    """为「手动 invoke 的子图」净化运行配置。
+
+    平台模式（langgraph dev / cloud）不把 checkpointer 传给 ``compile()``，而是在运行
+    config 的 ``__pregel_checkpointer`` 里注入（见 wiring.py / langgraph.json 注释）。该
+    私有键会一并透传给父图节点；若原样转发给子图的**同步** ``invoke()``，子图会误用
+    「异步专用」的 AsyncSqliteSaver 的同步接口（``get_tuple``），在平台抛
+    ``NotImplementedError``（本地主线程则死锁）。
+
+    本子图不落 checkpoint（镜头续接靠 prev_last_frame 显式传参），因此这里剔除全部
+    ``__`` 前缀的 pregel 私有键，只保留 configurable / recursion_limit / callbacks 等。
+    """
+    out = {k: v for k, v in (config or {}).items() if not str(k).startswith("__")}
+    cfg = out.get("configurable") or {}
+    out["configurable"] = {
+        k: v for k, v in cfg.items() if not str(k).startswith("__")
+    }
+    return out
+
+
 def _run_shot_chain_node(branch_state: ShotState, config: RunnableConfig | None = None):
     """父图节点包装：手动 invoke 编译子图，白名单取回结果。
 
@@ -354,7 +374,7 @@ def _run_shot_chain_node(branch_state: ShotState, config: RunnableConfig | None 
       等）在此处被过滤，避免过期副本流入主图（scenes 归并只走 scene_results）；
     - config（含 configurable.thread_id）透传进分支，保证 clips 落盘按 thread 隔离。
     """
-    _cfg = dict(config or {})
+    _cfg = _subgraph_config(config)
     _cfg.setdefault("configurable", {})
     _cfg["configurable"] = dict(_cfg["configurable"])
     _cfg["configurable"].setdefault(
@@ -457,7 +477,7 @@ def _run_chain_node(chain: Dict[str, Any], config: RunnableConfig | None = None)
     use_flf = bool(chain.get("use_first_last_frame"))
     base_report = dict(chain.get("asset_match_report") or {})
 
-    _cfg = dict(config or {})
+    _cfg = _subgraph_config(config)
     _cfg.setdefault("configurable", {})
     _cfg["configurable"] = dict(_cfg["configurable"])
     _cfg["configurable"].setdefault("thread_id", str(ctx.get("thread_id") or ""))

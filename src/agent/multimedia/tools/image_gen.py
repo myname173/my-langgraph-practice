@@ -223,7 +223,7 @@ def _is_rate_limit(text: str) -> bool:
 # 设置面板的「连通测试」按钮（/settings/probe）可预先手动验证 key 有效性。
 _IMAGE_FALLBACK_ORDER = [
     b.strip().lower()
-    for b in os.getenv("MULTIMEDIA_IMAGE_FALLBACK", "dashscope,siliconflow").split(",")
+    for b in os.getenv("MULTIMEDIA_IMAGE_FALLBACK", "dashscope,siliconflow,zhipu").split(",")
     if b.strip()
 ]
 
@@ -314,6 +314,38 @@ def _generate_via_siliconflow(
         u = (it or {}).get("url") or ""
         if u:
             print(f"    [IMG][SiliconFlow] {model} 生成成功")
+            return u
+    raise RuntimeError(f"响应中未找到图片 URL: {str(data)[:200]}")
+
+
+def _generate_via_zhipu(
+    prompt: str, size: str, ref_urls: list, negative_prompt: str, thread_id: str, timeout: int = 120
+) -> str:
+    """智谱 CogView 免费生图（cogview-3-flash model 级免费；暂不支持参考图）。"""
+    key = (os.getenv("ZHIPU_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("ZHIPU_API_KEY 未配置")
+    model = (os.getenv("ZHIPU_IMAGE_MODEL") or "cogview-3-flash").strip()
+    # 尺寸映射：CogView 接受 WxH；jimeng 的 2K 语义映射到长边 1440（CogView 支持档内任意 64 倍数）
+    sz = {"2K": "1440x720", "1K": "1024x1024"}.get(size.upper(), size if "x" in size else "1024x1024")
+    body: dict = {"model": model, "prompt": prompt, "size": sz}
+    if negative_prompt and negative_prompt.strip():
+        body["negative_prompt"] = negative_prompt.strip()
+
+    resp = requests.post(
+        "https://open.bigmodel.cn/api/paas/v4/images/generations",
+        json=body,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        timeout=timeout,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code} {resp.text[:300]}")
+    data = resp.json()
+    items = data.get("data") or []
+    for it in items:
+        u = (it or {}).get("url") or ""
+        if u:
+            print(f"    [IMG][Zhipu] {model} 生成成功")
             return u
     raise RuntimeError(f"响应中未找到图片 URL: {str(data)[:200]}")
 
@@ -452,7 +484,12 @@ def generate_keyframe(prompt: str, size: str = "2K", reference_image_urls: list 
                     out = _generate_via_siliconflow(prompt, size, inline_refs, negative_prompt, thread_id, timeout=timeout)
                     _bh.record_result("siliconflow", True, time.time() - _t1, kind="image", thread_id=thread_id)
                     return out
-                if backend not in ("dashscope", "siliconflow"):
+                if backend == "zhipu" and (os.getenv("ZHIPU_API_KEY") or "").strip():
+                    print("    [IMG] fallback → Zhipu CogView")
+                    out = _generate_via_zhipu(prompt, size, inline_refs, negative_prompt, thread_id, timeout=timeout)
+                    _bh.record_result("zhipu", True, time.time() - _t1, kind="image", thread_id=thread_id)
+                    return out
+                if backend not in ("dashscope", "siliconflow", "zhipu"):
                     print(f"    [WARN] 未知备选生图后端 '{backend}'，跳过")
             except Exception as e2:  # noqa: BLE001
                 print(f"    [WARN] 备选后端 {backend} 失败: {str(e2)[:140]}")
